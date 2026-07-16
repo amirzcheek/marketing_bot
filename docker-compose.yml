@@ -26,4 +26,4 @@ services:
 networks:
   platform:
     external: true
-    name: ${PLATFORM_NETWORK:-platform_net}
+    name: deploy_default
