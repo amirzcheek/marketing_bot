@@ -167,15 +167,37 @@ async def _show_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 # --- шаги диалога -----------------------------------------------------------
 
 
+MENU_TEXT = (
+    "👋 Здравствуйте, {name}!\n\n"
+    "Это бот приёма заявок в <b>отдел маркетинга КНУС</b>.\n"
+    "Заполним заявку за 7 шагов — займёт пару минут.\n\n"
+    "<b>Шаг 1/7.</b> Выберите ваш департамент:"
+)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     context.user_data["ticket"] = Ticket()
-    user = update.effective_user
     await update.effective_message.reply_text(
-        f"👋 Здравствуйте, {escape(user.first_name or 'коллега')}!\n\n"
-        "Это бот приёма заявок в <b>отдел маркетинга КНУС</b>.\n"
-        "Заполним заявку за 7 шагов — займёт пару минут.\n\n"
-        "<b>Шаг 1/7.</b> Выберите ваш департамент:",
+        MENU_TEXT.format(name=escape(update.effective_user.first_name or "коллега")),
+        reply_markup=_departments_kb(include_my=True),
+        parse_mode=ParseMode.HTML,
+    )
+    return DEPARTMENT
+
+
+async def menu_from_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Возврат в главное меню из «Мои заявки».
+
+    Точка входа в диалог: список заявок живёт вне ConversationHandler, поэтому кнопка
+    должна уметь запустить диалог заново — иначе после неё кнопки департаментов мертвы.
+    """
+    query = update.callback_query
+    await query.answer()
+    context.user_data.clear()
+    context.user_data["ticket"] = Ticket()
+    await query.edit_message_text(
+        MENU_TEXT.format(name=escape(update.effective_user.first_name or "коллега")),
         reply_markup=_departments_kb(include_my=True),
         parse_mode=ParseMode.HTML,
     )
@@ -783,6 +805,7 @@ def _my_list_kb(rows: list[dict], page: int) -> InlineKeyboardMarkup:
     if nav:
         keyboard.append(nav)
 
+    keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="menu:start")])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -792,14 +815,14 @@ async def _render_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page:
     query = update.callback_query
 
     if not rows:
-        text = (
-            "У вас пока нет заявок.\n\n"
-            "Нажмите /start, чтобы подать первую."
+        text = "У вас пока нет заявок.\n\nПодайте первую — это пара минут."
+        kb = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("📝 Подать заявку", callback_data="menu:start")]]
         )
         if query:
-            await query.edit_message_text(text)
+            await query.edit_message_text(text, reply_markup=kb)
         else:
-            await update.effective_message.reply_text(text)
+            await update.effective_message.reply_text(text, reply_markup=kb)
         return
 
     pages = (len(rows) + PAGE_SIZE - 1) // PAGE_SIZE
@@ -907,7 +930,10 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def build_conversation() -> ConversationHandler:
     return ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[
+            CommandHandler("start", start),
+            CallbackQueryHandler(menu_from_button, pattern=r"^menu:start$"),
+        ],
         states={
             DEPARTMENT: [CallbackQueryHandler(department_chosen, pattern=r"^dep:")],
             DEPARTMENT_OTHER: [
