@@ -221,6 +221,25 @@ class PlannerClient:
         self._bucket_names_at = time.monotonic()
         return self._bucket_names
 
+    async def list_plan_tasks(self) -> dict[str, dict]:
+        """Все задачи плана одним запросом: task_id -> задача.
+
+        Дешевле, чем дёргать GET /tasks/{id} по каждой заявке. Пагинацию Graph
+        отдаёт через @odata.nextLink — идём по ссылкам до конца.
+        """
+        client = await self._http()
+        url = f"{GRAPH_BASE}/planner/plans/{self.cfg.planner_plan_id}/tasks"
+        result: dict[str, dict] = {}
+        while url:
+            resp = await client.get(url, headers=await self._headers())
+            if resp.status_code != 200:
+                raise self._explain(resp, "чтение задач плана")
+            data = resp.json()
+            for task in data.get("value", []):
+                result[task["id"]] = task
+            url = data.get("@odata.nextLink")
+        return result
+
     async def get_task(self, task_id: str) -> dict | None:
         """Задача целиком или None, если её больше нет. Бросает GraphError на прочих ошибках."""
         client = await self._http()

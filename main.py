@@ -6,6 +6,7 @@ import sys
 from telegram import BotCommand
 from telegram.ext import Application, Defaults
 
+from bot.api import ApiServer
 from bot.config import load_config
 from bot.db import RequestsDB
 from bot.graph import PlannerClient
@@ -26,6 +27,12 @@ def setup_logging(level: str) -> None:
 
 async def _post_init(app: Application) -> None:
     await app.bot_data["db"].init()
+
+    # HTTP API поднимаем в этом же loop'е, параллельно polling'у
+    api = ApiServer(app.bot_data["config"], app.bot_data["db"], app.bot_data["planner"])
+    await api.start()
+    app.bot_data["api"] = api
+
     await app.bot.set_my_commands(
         [
             BotCommand("start", "Подать заявку в отдел маркетинга"),
@@ -40,8 +47,11 @@ async def _post_init(app: Application) -> None:
 
 
 async def _post_shutdown(app: Application) -> None:
+    api: ApiServer | None = app.bot_data.get("api")
     llm: LLMClient = app.bot_data.get("llm")
     planner: PlannerClient | None = app.bot_data.get("planner")
+    if api:
+        await api.stop()
     if llm:
         await llm.aclose()
     if planner:

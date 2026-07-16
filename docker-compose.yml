@@ -12,6 +12,10 @@ services:
       - ./data:/data
     networks:
       - platform
+    # HTTP API доступен другим контейнерам сети как marketing-bot:8080.
+    # expose, а не ports — наружу порт НЕ публикуется, только внутри сети деплоя.
+    expose:
+      - "8080"
     logging:
       driver: json-file
       options:

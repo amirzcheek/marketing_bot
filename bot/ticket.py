@@ -126,6 +126,20 @@ def task_status(task: dict, bucket_names: dict[str, str]) -> str:
     return status_from_percent(task.get("percentComplete"))
 
 
+def api_status(percent: int | None) -> str:
+    """Статус для HTTP API / веб-панели: три состояния по percentComplete.
+
+    Отдельно от bucket-статуса «Мои заявки» (тот детальнее, шесть состояний) —
+    панели нужны ровно три плашки: new / in_progress / done.
+    """
+    p = percent or 0
+    if p >= 100:
+        return "done"
+    if p > 0:
+        return "in_progress"
+    return "new"
+
+
 def status_from_percent(percent: int | None) -> str:
     """Запасной вариант: сегмент неизвестен — судим по проценту готовности."""
     if percent is None:

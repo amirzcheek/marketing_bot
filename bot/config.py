@@ -56,6 +56,10 @@ class Config:
     requests_db_path: Path
     log_level: str
 
+    api_port: int
+    api_token: str
+    status_refresh_seconds: int
+
     def validate(self) -> list[str]:
         """Возвращает список фатальных проблем конфигурации."""
         problems: list[str] = []
@@ -95,4 +99,7 @@ def load_config() -> Config:
         fallback_log_path=data_dir / "planner_fallback.jsonl",
         requests_db_path=Path(_str("REQUESTS_DB_PATH", str(data_dir / "requests.db"))),
         log_level=_str("LOG_LEVEL", "INFO").upper(),
+        api_port=_int("API_PORT", 8080),
+        api_token=_str("API_TOKEN"),
+        status_refresh_seconds=_int("STATUS_REFRESH_SECONDS", 90),
     )
