@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import date, datetime, timezone
 from html import escape
 
-from .constants import NO_DEADLINE, URGENT_CATEGORY
+from .constants import BUCKET_STATUS, NO_DEADLINE, URGENT_CATEGORY
 
 MAX_TITLE_GIST = 60
 
@@ -109,8 +109,25 @@ class Ticket:
         return d.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def task_status(task: dict, bucket_names: dict[str, str]) -> str:
+    """Статус заявки для заявителя.
+
+    Основной источник — сегмент, по которому маркетолог двигает карточку.
+    Отметка «Завершено» (percentComplete=100) перекрывает сегмент: её ставят прямо
+    на карточке, не перетаскивая задачу.
+    """
+    if (task.get("percentComplete") or 0) >= 100:
+        return "✅ Готово"
+
+    bucket_name = bucket_names.get(task.get("bucketId") or "")
+    if bucket_name:
+        return BUCKET_STATUS.get(bucket_name, bucket_name)
+
+    return status_from_percent(task.get("percentComplete"))
+
+
 def status_from_percent(percent: int | None) -> str:
-    """percentComplete задачи Planner -> статус для заявителя."""
+    """Запасной вариант: сегмент неизвестен — судим по проценту готовности."""
     if percent is None:
         return "❔ Статус неизвестен"
     if percent >= 100:

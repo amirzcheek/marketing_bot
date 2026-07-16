@@ -41,8 +41,8 @@ from .ticket import (
     planner_description,
     planner_title,
     request_card_html,
-    status_from_percent,
     summary_html,
+    task_status,
 )
 
 log = logging.getLogger(__name__)
@@ -826,15 +826,14 @@ async def _resolve_status(context: ContextTypes.DEFAULT_TYPE, row: dict) -> str:
         return STATUS_UNAVAILABLE
     try:
         task = await planner.get_task(row["planner_task_id"])
+        if task is None:  # задачу удалили из плана
+            return STATUS_UNAVAILABLE
+        return task_status(task, await planner.bucket_names())
     except GraphError:
         return STATUS_UNAVAILABLE
     except Exception:
         log.exception("Неожиданная ошибка при чтении статуса задачи %s", row["planner_task_id"])
         return STATUS_UNAVAILABLE
-
-    if task is None:  # задачу удалили из плана
-        return STATUS_UNAVAILABLE
-    return status_from_percent(task.get("percentComplete"))
 
 
 async def my_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

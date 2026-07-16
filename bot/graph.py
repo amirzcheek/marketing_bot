@@ -17,6 +17,9 @@ log = logging.getLogger(__name__)
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 SCOPE = "https://graph.microsoft.com/.default"
 
+# Имена сегментов меняются редко — держим их в кеше, чтобы не ходить в Graph на каждый просмотр
+BUCKET_CACHE_TTL = 300
+
 # Простым PUT грузим до 4 МБ, крупнее — upload session кусками (кратно 320 КБ)
 SIMPLE_UPLOAD_LIMIT = 4 * 1024 * 1024
 CHUNK_SIZE = 10 * 320 * 1024  # 3.2 МБ
@@ -43,6 +46,8 @@ class PlannerClient:
         self._token_lock = asyncio.Lock()
         self._bucket_id: str | None = cfg.planner_bucket_id or None
         self._group_id: str | None = None
+        self._bucket_names: dict[str, str] = {}
+        self._bucket_names_at: float = 0.0
 
     async def _http(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -198,6 +203,23 @@ class PlannerClient:
             "id": task_id,
             "url": f"https://tasks.office.com/{self.cfg.graph_tenant_id}/Home/Task/{task_id}",
         }
+
+    async def bucket_names(self) -> dict[str, str]:
+        """id сегмента -> имя. Сегменты переименовывают редко, поэтому кешируем ненадолго."""
+        if self._bucket_names and time.monotonic() - self._bucket_names_at < BUCKET_CACHE_TTL:
+            return self._bucket_names
+
+        client = await self._http()
+        resp = await client.get(
+            f"{GRAPH_BASE}/planner/plans/{self.cfg.planner_plan_id}/buckets",
+            headers=await self._headers(),
+        )
+        if resp.status_code != 200:
+            raise self._explain(resp, "чтение сегментов плана")
+
+        self._bucket_names = {b["id"]: b["name"] for b in resp.json().get("value", [])}
+        self._bucket_names_at = time.monotonic()
+        return self._bucket_names
 
     async def get_task(self, task_id: str) -> dict | None:
         """Задача целиком или None, если её больше нет. Бросает GraphError на прочих ошибках."""
