@@ -1,0 +1,25 @@
+services:
+  marketing-bot:
+    build: .
+    container_name: marketing-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      # jsonl-логи и SQLite «Мои заявки» — на volume, переживают пересборку контейнера
+      REQUESTS_DB_PATH: /data/requests.db
+    volumes:
+      - ./data:/data
+    networks:
+      - platform
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Бот работает через long polling — порты наружу не публикуем, вебхук не нужен.
+
+networks:
+  platform:
+    external: true
+    name: ${PLATFORM_NETWORK:-platform_net}
