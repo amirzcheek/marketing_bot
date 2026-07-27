@@ -35,7 +35,7 @@ async def _post_init(app: Application) -> None:
 
     await app.bot.set_my_commands(
         [
-            BotCommand("start", "Подать заявку в отдел маркетинга"),
+            BotCommand("start", "Главное меню бота"),
             BotCommand("my", "Мои заявки и их статус"),
             BotCommand("cancel", "Сбросить текущий диалог"),
             BotCommand("myid", "Показать chat_id этого чата"),

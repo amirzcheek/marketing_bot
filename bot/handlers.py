@@ -48,6 +48,7 @@ from .ticket import (
 log = logging.getLogger(__name__)
 
 (
+    MENU,
     DEPARTMENT,
     DEPARTMENT_OTHER,
     TASK_TYPE,
@@ -60,7 +61,7 @@ log = logging.getLogger(__name__)
     CONTACT,
     CONFIRM,
     EDIT_MENU,
-) = range(12)
+) = range(13)
 
 MIN_DESCRIPTION_LEN = 10
 
@@ -68,45 +69,75 @@ MIN_DESCRIPTION_LEN = 10
 # --- клавиатуры -------------------------------------------------------------
 
 
-def _departments_kb(include_my: bool = False) -> InlineKeyboardMarkup:
+def _back_row(context: ContextTypes.DEFAULT_TYPE, normal_target: str) -> list[InlineKeyboardButton]:
+    """Кнопка возврата. В режиме правки ведёт к сводке, иначе — на предыдущий шаг."""
+    if _editing(context):
+        return [InlineKeyboardButton("⬅️ К сводке", callback_data="nav:summary")]
+    return [InlineKeyboardButton("⬅️ Назад", callback_data=f"nav:{normal_target}")]
+
+
+def _menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📝 Создать заявку", callback_data="menu:create")],
+            [InlineKeyboardButton("📋 Мои заявки", callback_data="my:list:0")],
+        ]
+    )
+
+
+def _departments_kb(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(label, callback_data=f"dep:{key}")]
         for key, (label, _) in DEPARTMENTS.items()
     ]
-    if include_my:
-        rows.append([InlineKeyboardButton("📋 Мои заявки", callback_data="my:list:0")])
+    rows.append(_back_row(context, "menu"))
     return InlineKeyboardMarkup(rows)
 
 
-def _task_types_kb() -> InlineKeyboardMarkup:
+def _task_types_kb(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(label, callback_data=f"type:{key}")]
         for key, (label, _) in TASK_TYPES.items()
     ]
+    rows.append(_back_row(context, "department"))
     return InlineKeyboardMarkup(rows)
 
 
-def _priority_kb() -> InlineKeyboardMarkup:
+def _priority_kb(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(label, callback_data=f"prio:{key}")]
+        for key, (label, _, _) in PRIORITIES.items()
+    ]
+    rows.append(_back_row(context, "deadline"))
+    return InlineKeyboardMarkup(rows)
+
+
+def _deadline_kb(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(label, callback_data=f"prio:{key}")] for key, (label, _, _) in PRIORITIES.items()]
+        [
+            [InlineKeyboardButton("🗓 Без срока", callback_data="deadline:none")],
+            _back_row(context, "attach"),
+        ]
     )
 
 
-def _deadline_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🗓 Без срока", callback_data="deadline:none")]])
-
-
-def _attach_ask_kb() -> InlineKeyboardMarkup:
+def _attach_ask_kb(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("📎 Приложить", callback_data="attach:yes")],
             [InlineKeyboardButton("Пропустить", callback_data="attach:skip")],
+            _back_row(context, "description"),
         ]
     )
 
 
 def _attach_done_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("✅ Готово", callback_data="attach:done")]])
+
+
+def _back_only_kb(context: ContextTypes.DEFAULT_TYPE, normal_target: str) -> InlineKeyboardMarkup:
+    """Для шагов с вводом текста — на сообщении-подсказке только кнопка «Назад»."""
+    return InlineKeyboardMarkup([_back_row(context, normal_target)])
 
 
 def _confirm_kb() -> InlineKeyboardMarkup:
@@ -149,82 +180,161 @@ def _editing(context: ContextTypes.DEFAULT_TYPE) -> bool:
     return bool(context.user_data.get("editing"))
 
 
-async def _show_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["editing"] = False
-    ticket = _ticket(context)
-    text = summary_html(ticket)
+async def _send(update: Update, text: str, kb: InlineKeyboardMarkup | None) -> None:
+    """Редактируем сообщение, если пришли по кнопке; иначе шлём новое (после ввода текста)."""
     if update.callback_query:
-        await update.callback_query.message.reply_text(
-            text, reply_markup=_confirm_kb(), parse_mode=ParseMode.HTML
+        await update.callback_query.edit_message_text(
+            text, reply_markup=kb, parse_mode=ParseMode.HTML
         )
     else:
         await update.effective_message.reply_text(
-            text, reply_markup=_confirm_kb(), parse_mode=ParseMode.HTML
+            text, reply_markup=kb, parse_mode=ParseMode.HTML
         )
+
+
+# --- показ шагов (одна функция на шаг — для движения и вперёд, и назад) ------
+
+
+async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["editing"] = False
+    context.user_data.setdefault("ticket", Ticket())
+    await _send(
+        update,
+        f"👋 Здравствуйте, {escape(update.effective_user.first_name or 'коллега')}!\n\n"
+        "Это бот приёма заявок в <b>отдел маркетинга КНУС</b>.\n\n"
+        "Что хотите сделать?",
+        _menu_kb(),
+    )
+    return MENU
+
+
+async def show_department(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await _send(
+        update,
+        "<b>Шаг 1/7.</b> Выберите ваш департамент:",
+        _departments_kb(context),
+    )
+    return DEPARTMENT
+
+
+async def show_task_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await _send(update, "<b>Шаг 2/7.</b> Какой тип задачи?", _task_types_kb(context))
+    return TASK_TYPE
+
+
+async def show_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await _send(
+        update,
+        "<b>Шаг 3/7.</b> Опишите задачу: что нужно сделать, для чего, пожелания по формату.",
+        _back_only_kb(context, "type"),
+    )
+    return DESCRIPTION
+
+
+async def show_attach_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await _send(
+        update,
+        "<b>Шаг 4/7.</b> Приложить материалы? (фото, видео, документы — примеры дизайна, референсы)",
+        _attach_ask_kb(context),
+    )
+    return ATTACH_ASK
+
+
+async def show_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await _send(
+        update,
+        "<b>Шаг 5/7.</b> К какому сроку нужно? Введите дату в формате <code>ДД.ММ.ГГГГ</code>.",
+        _deadline_kb(context),
+    )
+    return DEADLINE
+
+
+async def show_priority(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await _send(update, "<b>Шаг 6/7.</b> Насколько срочно?", _priority_kb(context))
+    return PRIORITY
+
+
+async def show_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await _send(
+        update,
+        "<b>Шаг 7/7.</b> Контакт для уточнений — имя и телефон или почта.\n"
+        "Например: <code>Айгуль Смагулова, +7 701 123 45 67</code>",
+        _back_only_kb(context, "priority"),
+    )
+    return CONTACT
+
+
+async def show_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["editing"] = False
+    await _send(update, summary_html(_ticket(context)), _confirm_kb())
     return CONFIRM
 
 
-# --- шаги диалога -----------------------------------------------------------
-
-
-MENU_TEXT = (
-    "👋 Здравствуйте, {name}!\n\n"
-    "Это бот приёма заявок в <b>отдел маркетинга КНУС</b>.\n"
-    "Заполним заявку за 7 шагов — займёт пару минут.\n\n"
-    "<b>Шаг 1/7.</b> Выберите ваш департамент:"
-)
+# --- точки входа и навигация ------------------------------------------------
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     context.user_data["ticket"] = Ticket()
-    await update.effective_message.reply_text(
-        MENU_TEXT.format(name=escape(update.effective_user.first_name or "коллега")),
-        reply_markup=_departments_kb(include_my=True),
-        parse_mode=ParseMode.HTML,
-    )
-    return DEPARTMENT
+    return await show_menu(update, context)
 
 
-async def menu_from_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Возврат в главное меню из «Мои заявки».
+async def open_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Возврат в главное меню из «Мои заявки» (точка входа — работает из любого состояния)."""
+    await update.callback_query.answer()
+    context.user_data.setdefault("ticket", Ticket())
+    return await show_menu(update, context)
 
-    Точка входа в диалог: список заявок живёт вне ConversationHandler, поэтому кнопка
-    должна уметь запустить диалог заново — иначе после неё кнопки департаментов мертвы.
-    """
+
+async def menu_create(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.callback_query.answer()
+    context.user_data["editing"] = False
+    return await show_department(update, context)
+
+
+_NAV = {
+    "menu": show_menu,
+    "department": show_department,
+    "type": show_task_type,
+    "description": show_description,
+    "attach": show_attach_ask,
+    "deadline": show_deadline,
+    "priority": show_priority,
+    "summary": show_summary,
+}
+
+
+async def nav_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Кнопки «Назад»/«К сводке» — единый обработчик во всех состояниях."""
     query = update.callback_query
     await query.answer()
-    context.user_data.clear()
-    context.user_data["ticket"] = Ticket()
-    await query.edit_message_text(
-        MENU_TEXT.format(name=escape(update.effective_user.first_name or "коллега")),
-        reply_markup=_departments_kb(include_my=True),
-        parse_mode=ParseMode.HTML,
-    )
-    return DEPARTMENT
+    target = query.data.split(":", 1)[1]
+    handler = _NAV.get(target, show_menu)
+    return await handler(update, context)
+
+
+# --- обработка выбора/ввода на шагах ----------------------------------------
 
 
 async def department_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     key = query.data.split(":", 1)[1]
-    label, full_name = DEPARTMENTS[key]
+    _, full_name = DEPARTMENTS[key]
 
     if key == "other":
-        await query.edit_message_text("✏️ Введите название вашего департамента текстом:")
+        await query.edit_message_text(
+            "✏️ Введите название вашего департамента текстом:",
+            reply_markup=_back_only_kb(context, "department"),
+        )
         return DEPARTMENT_OTHER
 
     ticket = _ticket(context)
     ticket.department = full_name
-    await query.edit_message_text(f"Департамент: <b>{escape(full_name)}</b>", parse_mode=ParseMode.HTML)
 
     if _editing(context):
-        return await _show_summary(update, context)
-
-    await query.message.reply_text(
-        "<b>Шаг 2/7.</b> Какой тип задачи?", reply_markup=_task_types_kb(), parse_mode=ParseMode.HTML
-    )
-    return TASK_TYPE
+        return await show_summary(update, context)
+    return await show_task_type(update, context)
 
 
 async def department_other(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -237,12 +347,8 @@ async def department_other(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     ticket.department = text[:200]
 
     if _editing(context):
-        return await _show_summary(update, context)
-
-    await update.effective_message.reply_text(
-        "<b>Шаг 2/7.</b> Какой тип задачи?", reply_markup=_task_types_kb(), parse_mode=ParseMode.HTML
-    )
-    return TASK_TYPE
+        return await show_summary(update, context)
+    return await show_task_type(update, context)
 
 
 async def task_type_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -252,22 +358,19 @@ async def task_type_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     _, name = TASK_TYPES[key]
 
     if key == "other":
-        await query.edit_message_text("✏️ Опишите тип задачи одним-двумя словами:")
+        await query.edit_message_text(
+            "✏️ Опишите тип задачи одним-двумя словами:",
+            reply_markup=_back_only_kb(context, "type"),
+        )
         return TASK_TYPE_OTHER
 
     ticket = _ticket(context)
     ticket.task_type = name
     ticket.category = TASK_TYPE_CATEGORY.get(key, "")
-    await query.edit_message_text(f"Тип задачи: <b>{escape(name)}</b>", parse_mode=ParseMode.HTML)
 
     if _editing(context):
-        return await _show_summary(update, context)
-
-    await query.message.reply_text(
-        "<b>Шаг 3/7.</b> Опишите задачу: что нужно сделать, для чего, пожелания по формату.",
-        parse_mode=ParseMode.HTML,
-    )
-    return DESCRIPTION
+        return await show_summary(update, context)
+    return await show_description(update, context)
 
 
 async def task_type_other(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -281,13 +384,8 @@ async def task_type_other(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     ticket.category = ""  # произвольный тип метке не соответствует
 
     if _editing(context):
-        return await _show_summary(update, context)
-
-    await update.effective_message.reply_text(
-        "<b>Шаг 3/7.</b> Опишите задачу: что нужно сделать, для чего, пожелания по формату.",
-        parse_mode=ParseMode.HTML,
-    )
-    return DESCRIPTION
+        return await show_summary(update, context)
+    return await show_description(update, context)
 
 
 async def description_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -330,14 +428,8 @@ async def description_entered(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
 
     if _editing(context):
-        return await _show_summary(update, context)
-
-    await update.effective_message.reply_text(
-        "<b>Шаг 4/7.</b> Приложить материалы? (фото, видео, документы — примеры дизайна, референсы)",
-        reply_markup=_attach_ask_kb(),
-        parse_mode=ParseMode.HTML,
-    )
-    return ATTACH_ASK
+        return await show_summary(update, context)
+    return await show_attach_ask(update, context)
 
 
 # --- вложения ---------------------------------------------------------------
@@ -350,7 +442,7 @@ async def attach_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     cfg: Config = context.bot_data["config"]
 
     if action == "skip":
-        await query.edit_message_text("Без материалов.")
+        _ticket(context).attachments.clear()
         return await _after_attachments(update, context)
 
     await query.edit_message_text(
@@ -431,27 +523,14 @@ async def attach_collect(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def attach_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    ticket = _ticket(context)
-    count = len(ticket.attachments)
-    await query.edit_message_text(
-        f"📎 Материалов приложено: {count}" if count else "Без материалов."
-    )
+    await update.callback_query.answer()
     return await _after_attachments(update, context)
 
 
 async def _after_attachments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if _editing(context):
-        return await _show_summary(update, context)
-
-    message = update.callback_query.message if update.callback_query else update.effective_message
-    await message.reply_text(
-        "<b>Шаг 5/7.</b> К какому сроку нужно? Введите дату в формате <code>ДД.ММ.ГГГГ</code>.",
-        reply_markup=_deadline_kb(),
-        parse_mode=ParseMode.HTML,
-    )
-    return DEADLINE
+        return await show_summary(update, context)
+    return await show_deadline(update, context)
 
 
 async def deadline_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -462,7 +541,7 @@ async def deadline_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.effective_message.reply_text(
             "❌ Не похоже на дату. Нужен формат <code>ДД.ММ.ГГГГ</code>, например <code>25.08.2026</code>.\n"
             "Или нажмите «Без срока».",
-            reply_markup=_deadline_kb(),
+            reply_markup=_deadline_kb(context),
             parse_mode=ParseMode.HTML,
         )
         return DEADLINE
@@ -470,7 +549,7 @@ async def deadline_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if parsed < date.today():
         await update.effective_message.reply_text(
             "❌ Эта дата уже прошла. Введите дату не раньше сегодняшней:",
-            reply_markup=_deadline_kb(),
+            reply_markup=_deadline_kb(context),
         )
         return DEADLINE
 
@@ -478,28 +557,18 @@ async def deadline_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     ticket.deadline = parsed.strftime("%d.%m.%Y")
 
     if _editing(context):
-        return await _show_summary(update, context)
-
-    await update.effective_message.reply_text(
-        "<b>Шаг 6/7.</b> Насколько срочно?", reply_markup=_priority_kb(), parse_mode=ParseMode.HTML
-    )
-    return PRIORITY
+        return await show_summary(update, context)
+    return await show_priority(update, context)
 
 
 async def deadline_skipped(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    ticket = _ticket(context)
-    ticket.deadline = NO_DEADLINE
-    await query.edit_message_text("Дедлайн: <b>без срока</b>", parse_mode=ParseMode.HTML)
+    _ticket(context).deadline = NO_DEADLINE
 
     if _editing(context):
-        return await _show_summary(update, context)
-
-    await query.message.reply_text(
-        "<b>Шаг 6/7.</b> Насколько срочно?", reply_markup=_priority_kb(), parse_mode=ParseMode.HTML
-    )
-    return PRIORITY
+        return await show_summary(update, context)
+    return await show_priority(update, context)
 
 
 async def priority_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -511,17 +580,10 @@ async def priority_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     ticket = _ticket(context)
     ticket.priority = name
     ticket.priority_value = value
-    await query.edit_message_text(f"Приоритет: <b>{escape(name)}</b>", parse_mode=ParseMode.HTML)
 
     if _editing(context):
-        return await _show_summary(update, context)
-
-    await query.message.reply_text(
-        "<b>Шаг 7/7.</b> Контакт для уточнений — имя и телефон или почта.\n"
-        "Например: <code>Айгуль Смагулова, +7 701 123 45 67</code>",
-        parse_mode=ParseMode.HTML,
-    )
-    return CONTACT
+        return await show_summary(update, context)
+    return await show_contact(update, context)
 
 
 async def contact_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -534,7 +596,7 @@ async def contact_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     ticket = _ticket(context)
     ticket.contact = text[:300]
-    return await _show_summary(update, context)
+    return await show_summary(update, context)
 
 
 # --- сводка / правка / отправка --------------------------------------------
@@ -563,41 +625,31 @@ async def edit_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     field = query.data.split(":", 1)[1]
 
     if field == "back":
-        return await _show_summary(update, context)
+        return await show_summary(update, context)
 
+    # editing=True → у всех шагов кнопка «Назад» превращается в «К сводке»
     context.user_data["editing"] = True
 
     if field == "department":
-        await query.edit_message_text("Выберите департамент:", reply_markup=_departments_kb())
-        return DEPARTMENT
+        return await show_department(update, context)
     if field == "type":
-        await query.edit_message_text("Выберите тип задачи:", reply_markup=_task_types_kb())
-        return TASK_TYPE
+        return await show_task_type(update, context)
     if field == "description":
-        await query.edit_message_text("Введите новое описание задачи:")
-        return DESCRIPTION
+        return await show_description(update, context)
     if field == "attachments":
-        cfg: Config = context.bot_data["config"]
-        ticket = _ticket(context)
-        ticket.attachments.clear()  # проще пересобрать список, чем удалять по одному
+        _ticket(context).attachments.clear()  # проще пересобрать список, чем удалять по одному
         await query.edit_message_text(
-            f"Прежние материалы убраны. Пришлите файлы заново (до {cfg.max_attachments} шт.) "
-            "и нажмите «Готово».\nЕсли материалы не нужны — сразу «Готово».",
+            "Прежние материалы убраны. Пришлите файлы заново и нажмите «Готово».\n"
+            "Если материалы не нужны — сразу «Готово».",
             reply_markup=_attach_done_kb(),
         )
         return ATTACH_COLLECT
     if field == "deadline":
-        await query.edit_message_text(
-            "Введите дату в формате ДД.ММ.ГГГГ или нажмите «Без срока»:",
-            reply_markup=_deadline_kb(),
-        )
-        return DEADLINE
+        return await show_deadline(update, context)
     if field == "priority":
-        await query.edit_message_text("Выберите приоритет:", reply_markup=_priority_kb())
-        return PRIORITY
+        return await show_priority(update, context)
     if field == "contact":
-        await query.edit_message_text("Введите контакт для уточнений:")
-        return CONTACT
+        return await show_contact(update, context)
 
     return CONFIRM
 
@@ -689,7 +741,15 @@ async def _submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if error and planner is not None:
         await log_fallback(cfg.fallback_log_path, ticket, error)
 
-    await query.message.reply_text("Нужна ещё одна заявка? Нажмите /start.")
+    await query.message.reply_text(
+        "Что дальше?",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("📝 Ещё заявку", callback_data="menu:create")],
+                [InlineKeyboardButton("📋 Мои заявки", callback_data="my:list:0")],
+            ]
+        ),
+    )
     # Пока грузились файлы, пользователь мог начать новую заявку — чужой ticket не трогаем.
     if context.user_data.get("ticket") is ticket:
         context.user_data.clear()
@@ -805,7 +865,7 @@ def _my_list_kb(rows: list[dict], page: int) -> InlineKeyboardMarkup:
     if nav:
         keyboard.append(nav)
 
-    keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="menu:start")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="menu:open")])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -817,7 +877,10 @@ async def _render_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page:
     if not rows:
         text = "У вас пока нет заявок.\n\nПодайте первую — это пара минут."
         kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("📝 Подать заявку", callback_data="menu:start")]]
+            [
+                [InlineKeyboardButton("📝 Подать заявку", callback_data="menu:create")],
+                [InlineKeyboardButton("⬅️ В меню", callback_data="menu:open")],
+            ]
         )
         if query:
             await query.edit_message_text(text, reply_markup=kb)
@@ -911,7 +974,7 @@ async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
         "Бот приёма заявок в отдел маркетинга КНУС.\n\n"
-        "/start — подать заявку\n"
+        "/start — главное меню (создать заявку / мои заявки)\n"
         "/my — мои заявки и их статус\n"
         "/cancel — сбросить текущий диалог\n"
         "/myid — показать chat_id этого чата"
@@ -929,20 +992,31 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def build_conversation() -> ConversationHandler:
+    nav = CallbackQueryHandler(nav_back, pattern=r"^nav:")
     return ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
-            CallbackQueryHandler(menu_from_button, pattern=r"^menu:start$"),
+            # обе кнопки работают из любого состояния (в т.ч. после END) — это точки входа
+            CallbackQueryHandler(open_menu, pattern=r"^menu:open$"),
+            CallbackQueryHandler(menu_create, pattern=r"^menu:create$"),
         ],
         states={
-            DEPARTMENT: [CallbackQueryHandler(department_chosen, pattern=r"^dep:")],
+            MENU: [CallbackQueryHandler(menu_create, pattern=r"^menu:create$")],
+            DEPARTMENT: [CallbackQueryHandler(department_chosen, pattern=r"^dep:"), nav],
             DEPARTMENT_OTHER: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, department_other)
+                nav,
+                MessageHandler(filters.TEXT & ~filters.COMMAND, department_other),
             ],
-            TASK_TYPE: [CallbackQueryHandler(task_type_chosen, pattern=r"^type:")],
-            TASK_TYPE_OTHER: [MessageHandler(filters.TEXT & ~filters.COMMAND, task_type_other)],
-            DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, description_entered)],
-            ATTACH_ASK: [CallbackQueryHandler(attach_ask, pattern=r"^attach:(yes|skip)$")],
+            TASK_TYPE: [CallbackQueryHandler(task_type_chosen, pattern=r"^type:"), nav],
+            TASK_TYPE_OTHER: [
+                nav,
+                MessageHandler(filters.TEXT & ~filters.COMMAND, task_type_other),
+            ],
+            DESCRIPTION: [
+                nav,
+                MessageHandler(filters.TEXT & ~filters.COMMAND, description_entered),
+            ],
+            ATTACH_ASK: [CallbackQueryHandler(attach_ask, pattern=r"^attach:(yes|skip)$"), nav],
             ATTACH_COLLECT: [
                 CallbackQueryHandler(attach_done, pattern=r"^attach:done$"),
                 MessageHandler(
@@ -954,10 +1028,11 @@ def build_conversation() -> ConversationHandler:
             ],
             DEADLINE: [
                 CallbackQueryHandler(deadline_skipped, pattern=r"^deadline:none$"),
+                nav,
                 MessageHandler(filters.TEXT & ~filters.COMMAND, deadline_entered),
             ],
-            PRIORITY: [CallbackQueryHandler(priority_chosen, pattern=r"^prio:")],
-            CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, contact_entered)],
+            PRIORITY: [CallbackQueryHandler(priority_chosen, pattern=r"^prio:"), nav],
+            CONTACT: [nav, MessageHandler(filters.TEXT & ~filters.COMMAND, contact_entered)],
             CONFIRM: [CallbackQueryHandler(final_action, pattern=r"^final:")],
             EDIT_MENU: [CallbackQueryHandler(edit_choice, pattern=r"^edit:")],
         },
