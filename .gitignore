@@ -4,3 +4,4 @@ venv/
 data/
 __pycache__/
 *.pyc
+удаление заявки с бд.txt
