@@ -49,6 +49,7 @@ TASK_TYPES: dict[str, tuple[str, str]] = {
     "design": ("🎨 Дизайн (баннер/пост)", "Дизайн"),
     "video": ("🎬 Видео", "Видео"),
     "smm": ("📱 Публикация в соцсетях", "Публикация в соцсетях"),
+    "site": ("🌐 Сайт", "Сайт"),
     "print": ("🖨 Полиграфия", "Полиграфия"),
     "event": ("🎪 Мероприятие", "Мероприятие"),
     "other": ("✏️ Другое", ""),  # вводится текстом
@@ -69,6 +70,7 @@ TASK_TYPE_CATEGORY: dict[str, str] = {
     "smm": "category3",  # 📱 Соцсети
     "print": "category4",  # 🖨 Полиграфия
     "event": "category5",  # 🎪 Мероприятие
+    "site": "category7",  # 🌐 Сайт (category6 занят меткой «Срочно»)
 }
 URGENT_CATEGORY = "category6"  # 🔴 Срочно
 
