@@ -987,6 +987,17 @@ async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+async def stale_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопка на старом сообщении, не относящаяся к текущему шагу, — не молчим, а поясняем.
+
+    Ловит любые callback'и, не разобранные диалогом и разделом «Мои заявки»
+    (регистрируется последним). Всплывающее окно вместо «ничего не произошло».
+    """
+    await update.callback_query.answer(
+        "Эта кнопка устарела. Нажмите /start, чтобы открыть меню.", show_alert=True
+    )
+
+
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.exception("Ошибка при обработке апдейта", exc_info=context.error)
 
@@ -1041,6 +1052,8 @@ def build_conversation() -> ConversationHandler:
             CommandHandler("start", start),
         ],
         allow_reentry=True,
+        name="request_flow",
+        persistent=True,  # состояние переживает перезапуск контейнера (см. PicklePersistence)
     )
 
 
@@ -1054,4 +1067,7 @@ def register(app: Application) -> None:
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback_text))
+    # Последним: любой callback, не пойманный диалогом и «Моими заявками», —
+    # это устаревшая кнопка. Отвечаем всплывающим окном, а не молчим.
+    app.add_handler(CallbackQueryHandler(stale_callback))
     app.add_error_handler(on_error)

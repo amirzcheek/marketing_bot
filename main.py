@@ -4,7 +4,7 @@ import logging
 import sys
 
 from telegram import BotCommand
-from telegram.ext import Application, Defaults
+from telegram.ext import Application, Defaults, PersistenceInput, PicklePersistence
 
 from bot.api import ApiServer
 from bot.config import load_config
@@ -68,10 +68,23 @@ def main() -> None:
             log.error("Конфигурация: %s", p)
         sys.exit(1)
 
+    # Состояние диалога и черновик заявки храним на volume, чтобы они пережили
+    # перезапуск/передеплой контейнера. Иначе после рестарта кнопки шагов у тех,
+    # кто не дозаполнил заявку, перестают отвечать (состояние теряется).
+    # bot_data НЕ сохраняем — там httpx-клиенты и asyncio-локи, они не пиклятся.
+    persistence = PicklePersistence(
+        filepath=cfg.requests_db_path.parent / "ptb_state.pkl",
+        store_data=PersistenceInput(
+            bot_data=False, chat_data=True, user_data=True, callback_data=False
+        ),
+        update_interval=30,
+    )
+
     app = (
         Application.builder()
         .token(cfg.telegram_bot_token)
         .defaults(Defaults(block=False))
+        .persistence(persistence)
         .post_init(_post_init)
         .post_shutdown(_post_shutdown)
         .build()
