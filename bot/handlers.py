@@ -745,7 +745,7 @@ async def _submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "Что дальше?",
         reply_markup=InlineKeyboardMarkup(
             [
-                [InlineKeyboardButton("📝 Ещё заявку", callback_data="menu:create")],
+                [InlineKeyboardButton("📝 Отправить ещё одну заявку", callback_data="menu:create")],
                 [InlineKeyboardButton("📋 Мои заявки", callback_data="my:list:0")],
             ]
         ),
