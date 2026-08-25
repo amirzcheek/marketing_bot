@@ -7,9 +7,11 @@
 #      (пересборка образа не нужна — файл читается при старте).
 #
 # Обязательное поле у enabled-отдела: planner_plan_id.
-# Пустые поля отдела marketing подхватываются из .env (обратная совместимость):
+# Пустой notification_chat_id любого отдела подхватывается из .env по имени <КОД>_CHAT_ID:
+#   marketing → MARKETING_CHAT_ID, it → IT_CHAT_ID.
+# У marketing из .env берутся ещё и план/сегмент (обратная совместимость):
 #   planner_plan_id←PLANNER_PLAN_ID, planner_bucket_id←PLANNER_BUCKET_ID,
-#   planner_bucket_name←PLANNER_BUCKET_NAME, notification_chat_id←MARKETING_CHAT_ID.
+#   planner_bucket_name←PLANNER_BUCKET_NAME.
 
 departments:
   marketing:
@@ -36,7 +38,7 @@ departments:
     planner_plan_id: KQtVSXu0FEuZbqIuW8TIt5gAG0hT
     planner_bucket_id: ""            # пусто → бот найдёт сегмент по имени
     planner_bucket_name: "Новые"     # у плана ДИТ сегмент называется именно так
-    notification_chat_id: ""         # ← ВПИШИ chat_id чата ДИТ (см. README, /myid)
+    notification_chat_id: ""         # пусто → берётся IT_CHAT_ID из .env (или впиши chat_id здесь)
     assignees: []                    # ← при желании впиши email-ы саппорта ДИТ; пусто = общая очередь
     request_types: [account, email, hardware, network, software, website, consultation, other]
     bucket_status:

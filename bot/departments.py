@@ -9,6 +9,7 @@
 """
 
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -81,12 +82,16 @@ def _parse_department(code: str, raw: dict, cfg: Config) -> Department:
     bucket_name = _s("planner_bucket_name")
     chat_id = _s("notification_chat_id")
 
-    # Пустые поля маркетинга подхватываем из .env — обратная совместимость.
+    # Пустой notification_chat_id подхватываем из .env: <КОД_ОТДЕЛА>_CHAT_ID
+    # (marketing → MARKETING_CHAT_ID, it → IT_CHAT_ID и т.д.).
+    if not chat_id:
+        chat_id = (os.getenv(f"{code.upper()}_CHAT_ID") or "").strip()
+
+    # У маркетинга ещё и план/сегмент подхватываются из .env — обратная совместимость.
     if code == "marketing":
         plan_id = plan_id or cfg.planner_plan_id
         bucket_id = bucket_id or cfg.planner_bucket_id
         bucket_name = bucket_name or cfg.planner_bucket_name
-        chat_id = chat_id or cfg.marketing_chat_id
 
     assignees = tuple(str(a).strip() for a in (raw.get("assignees") or []) if str(a).strip())
     request_types = tuple(str(t).strip() for t in (raw.get("request_types") or []) if str(t).strip())
