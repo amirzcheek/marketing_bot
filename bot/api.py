@@ -207,29 +207,32 @@ async def _read_submission(request: web.Request, tmp_dir: Path) -> tuple[dict[st
 
 
 async def _notify_web_submission(
-    app: web.Application, ticket: Ticket, files: list[Path], chat_id: str
+    app: web.Application, ticket: Ticket, files: list[Path], chat_ids: tuple[str, ...]
 ) -> None:
     bot: Bot | None = app.get("bot")
-    if not bot or not chat_id:
+    if not bot or not chat_ids:
         return
-    try:
-        await bot.send_message(
-            chat_id=chat_id,
-            text=notification_html(ticket),
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
-        )
-        for index, local_path in enumerate(files):
-            attachment = ticket.attachments[index]
-            with local_path.open("rb") as fh:
-                await bot.send_document(
-                    chat_id=chat_id,
-                    document=fh,
-                    filename=attachment.file_name,
-                    caption=f"📎 Заявка {ticket.number} — {attachment.file_name}",
-                )
-    except (TelegramError, OSError) as exc:
-        log.error("Заявка %s: уведомление в Telegram не отправлено: %s", ticket.number, exc)
+    for chat_id in chat_ids:
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=notification_html(ticket),
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+            for index, local_path in enumerate(files):
+                attachment = ticket.attachments[index]
+                with local_path.open("rb") as fh:
+                    await bot.send_document(
+                        chat_id=chat_id,
+                        document=fh,
+                        filename=attachment.file_name,
+                        caption=f"📎 Заявка {ticket.number} — {attachment.file_name}",
+                    )
+        except (TelegramError, OSError) as exc:
+            log.error(
+                "Заявка %s: уведомление в чат %s не отправлено: %s", ticket.number, chat_id, exc
+            )
 
 
 async def create_ticket(request: web.Request) -> web.Response:
@@ -304,7 +307,7 @@ async def create_ticket(request: web.Request) -> web.Response:
         ticket.number = new_number(ticket.target_department)
         now = datetime.now()
         ticket.created_at = now.strftime("%d.%m.%Y %H:%M")
-        notify_chat = route.notification_chat_id
+        notify_chats = route.notification_chat_ids
 
         try:
             created = await planner.create_task(
@@ -324,7 +327,7 @@ async def create_ticket(request: web.Request) -> web.Response:
             log.exception("Веб-заявка %s: не удалось создать задачу Planner", ticket.number)
             await log_request(cfg.requests_log_path, ticket, "planner_failed")
             await log_fallback(cfg.fallback_log_path, ticket, str(exc))
-            await _notify_web_submission(request.app, ticket, files, notify_chat)
+            await _notify_web_submission(request.app, ticket, files, notify_chats)
             return _json(
                 {"error": "planner_error", "message": "Заявка не сохранена в Planner", "id": ticket.number},
                 status=502,
@@ -355,7 +358,7 @@ async def create_ticket(request: web.Request) -> web.Response:
             warnings.append("Не удалось записать описание в Planner")
             log.error("Веб-заявка %s: details Planner: %s", ticket.number, exc)
 
-        await _notify_web_submission(request.app, ticket, files, notify_chat)
+        await _notify_web_submission(request.app, ticket, files, notify_chats)
         await log_request(cfg.requests_log_path, ticket, "planner_ok")
         return _json(
             {

@@ -110,7 +110,7 @@ def main() -> None:
     enabled = registry.enabled()
     log.info(
         "Отделы-исполнители: %s",
-        ", ".join(f"{d.name} (chat={'да' if d.notification_chat_id else 'НЕТ'})" for d in enabled),
+        ", ".join(f"{d.name} (chat={'да' if d.notification_chat_ids else 'НЕТ'})" for d in enabled),
     )
 
     if not cfg.planner_enabled:

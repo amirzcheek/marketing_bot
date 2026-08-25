@@ -742,7 +742,10 @@ async def _submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ticket.planner_plan_id = route.plan_id
         ticket.assignees = list(route.assignees)
         ticket.target_department_name = route.name
-    notify_chat = route.notification_chat_id if route else cfg.marketing_chat_id
+    if route is not None:
+        notify_chats = route.notification_chat_ids
+    else:
+        notify_chats = (cfg.marketing_chat_id,) if cfg.marketing_chat_id else ()
 
     ticket.number = new_number(ticket.target_department)
     now = datetime.now()
@@ -807,8 +810,8 @@ async def _submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await query.message.reply_text(text, parse_mode=ParseMode.HTML)
 
     # Быстрый путь: карточка и файлы по file_id — байты через бота не идут.
-    await _notify_target(context, ticket, notify_chat)
-    await _forward_attachments(context, ticket, notify_chat)
+    await _notify_target(context, ticket, notify_chats)
+    await _forward_attachments(context, ticket, notify_chats)
 
     # Медленный путь: каждый файл скачивается РОВНО ОДИН раз — ради SharePoint.
     if ticket.planner_task_id and ticket.uploadable:
@@ -848,10 +851,10 @@ async def _submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def _forward_attachments(
-    context: ContextTypes.DEFAULT_TYPE, ticket: Ticket, chat_id: str
+    context: ContextTypes.DEFAULT_TYPE, ticket: Ticket, chat_ids: tuple[str, ...]
 ) -> None:
-    """Пересылает файлы в чат отдела по file_id — без скачивания, мгновенно."""
-    if not chat_id or not ticket.attachments:
+    """Пересылает файлы во все чаты отдела по file_id — без скачивания, мгновенно."""
+    if not chat_ids or not ticket.attachments:
         return
 
     senders = {
@@ -860,18 +863,20 @@ async def _forward_attachments(
         "video": context.bot.send_video,
         "animation": context.bot.send_animation,
     }
-    for attachment in ticket.attachments:
-        send = senders.get(attachment.kind, context.bot.send_document)
-        caption = f"📎 Заявка {ticket.number} — {attachment.file_name}"
-        try:
-            await send(chat_id=chat_id, **{attachment.kind: attachment.file_id}, caption=caption)
-        except TelegramError as exc:
-            log.error(
-                "Заявка %s: не удалось переслать %s в чат отдела: %s",
-                ticket.number,
-                attachment.file_name,
-                exc,
-            )
+    for chat_id in chat_ids:
+        for attachment in ticket.attachments:
+            send = senders.get(attachment.kind, context.bot.send_document)
+            caption = f"📎 Заявка {ticket.number} — {attachment.file_name}"
+            try:
+                await send(chat_id=chat_id, **{attachment.kind: attachment.file_id}, caption=caption)
+            except TelegramError as exc:
+                log.error(
+                    "Заявка %s: не удалось переслать %s в чат %s: %s",
+                    ticket.number,
+                    attachment.file_name,
+                    chat_id,
+                    exc,
+                )
 
 
 async def _upload_attachments(context: ContextTypes.DEFAULT_TYPE, ticket: Ticket) -> None:
@@ -906,30 +911,33 @@ async def _upload_attachments(context: ContextTypes.DEFAULT_TYPE, ticket: Ticket
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-async def _notify_target(context: ContextTypes.DEFAULT_TYPE, ticket: Ticket, chat_id: str) -> None:
-    if not chat_id:
+async def _notify_target(
+    context: ContextTypes.DEFAULT_TYPE, ticket: Ticket, chat_ids: tuple[str, ...]
+) -> None:
+    if not chat_ids:
         log.warning(
             "Для отдела %r не задан notification_chat_id — уведомление о заявке %s не отправлено. "
-            "Впиши chat_id в departments.yaml.",
+            "Впиши chat_id в departments.yaml или <КОД>_CHAT_ID в .env.",
             ticket.target_department,
             ticket.number,
         )
         return
-    try:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=notification_html(ticket),
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
-        )
-    except TelegramError as exc:
-        log.error(
-            "Не удалось отправить уведомление в чат %s отдела %r: %s. "
-            "Убедись, что чат существует и получатель/группа начали диалог с ботом.",
-            chat_id,
-            ticket.target_department,
-            exc,
-        )
+    for chat_id in chat_ids:
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=notification_html(ticket),
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+        except TelegramError as exc:
+            log.error(
+                "Не удалось отправить уведомление в чат %s отдела %r: %s. "
+                "Убедись, что чат существует и получатель/группа начали диалог с ботом.",
+                chat_id,
+                ticket.target_department,
+                exc,
+            )
 
 
 # --- мои заявки -------------------------------------------------------------

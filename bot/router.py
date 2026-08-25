@@ -16,7 +16,7 @@ class Route:
     plan_id: str
     bucket_id: str
     bucket_name: str
-    notification_chat_id: str
+    notification_chat_ids: tuple[str, ...]  # уведомления идут во все эти чаты
     assignees: tuple[str, ...]
     bucket_status: dict[str, str]
 
@@ -32,7 +32,7 @@ class TicketRouter:
             plan_id=dep.planner_plan_id,
             bucket_id=dep.planner_bucket_id,
             bucket_name=dep.planner_bucket_name,
-            notification_chat_id=dep.notification_chat_id,
+            notification_chat_ids=dep.notification_chat_ids,
             assignees=dep.assignees,
             # у отдела свой маппинг сегмент→статус; если нет — общий дефолт
             bucket_status=dep.bucket_status or BUCKET_STATUS,

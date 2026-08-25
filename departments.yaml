@@ -7,8 +7,10 @@
 #      (пересборка образа не нужна — файл читается при старте).
 #
 # Обязательное поле у enabled-отдела: planner_plan_id.
-# Пустой notification_chat_id любого отдела подхватывается из .env по имени <КОД>_CHAT_ID:
-#   marketing → MARKETING_CHAT_ID, it → IT_CHAT_ID.
+# notification_chat_id: можно указать НЕСКОЛЬКО получателей — списком YAML или через запятую:
+#   notification_chat_id: [111, 222]     ИЛИ     notification_chat_id: "111, 222"
+# Пустой notification_chat_id подхватывается из .env по имени <КОД>_CHAT_ID
+#   (marketing → MARKETING_CHAT_ID, it → IT_CHAT_ID), там тоже можно несколько через запятую.
 # У marketing из .env берутся ещё и план/сегмент (обратная совместимость):
 #   planner_plan_id←PLANNER_PLAN_ID, planner_bucket_id←PLANNER_BUCKET_ID,
 #   planner_bucket_name←PLANNER_BUCKET_NAME.

@@ -10,6 +10,7 @@
 
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -28,7 +29,7 @@ class Department:
     planner_plan_id: str
     planner_bucket_id: str
     planner_bucket_name: str
-    notification_chat_id: str
+    notification_chat_ids: tuple[str, ...]  # уведомления могут идти в несколько чатов
     assignees: tuple[str, ...]
     request_types: tuple[str, ...]
     bucket_status: dict[str, str] = field(default_factory=dict)
@@ -66,11 +67,19 @@ def _marketing_from_env(cfg: Config) -> Department:
         planner_plan_id=cfg.planner_plan_id,
         planner_bucket_id=cfg.planner_bucket_id,
         planner_bucket_name=cfg.planner_bucket_name,
-        notification_chat_id=cfg.marketing_chat_id,
+        notification_chat_ids=_parse_chat_ids(cfg.marketing_chat_id),
         assignees=(),
         request_types=("design", "video", "social_media", "website", "polygraphy", "event", "other"),
         bucket_status={},
     )
+
+
+def _parse_chat_ids(value) -> tuple[str, ...]:
+    """Один chat_id, список или строка через запятую/пробел → кортеж chat_id."""
+    if value is None:
+        return ()
+    items = value if isinstance(value, (list, tuple)) else re.split(r"[,\s]+", str(value))
+    return tuple(dict.fromkeys(str(v).strip() for v in items if str(v).strip()))
 
 
 def _parse_department(code: str, raw: dict, cfg: Config) -> Department:
@@ -80,12 +89,12 @@ def _parse_department(code: str, raw: dict, cfg: Config) -> Department:
     plan_id = _s("planner_plan_id")
     bucket_id = _s("planner_bucket_id")
     bucket_name = _s("planner_bucket_name")
-    chat_id = _s("notification_chat_id")
 
-    # Пустой notification_chat_id подхватываем из .env: <КОД_ОТДЕЛА>_CHAT_ID
-    # (marketing → MARKETING_CHAT_ID, it → IT_CHAT_ID и т.д.).
-    if not chat_id:
-        chat_id = (os.getenv(f"{code.upper()}_CHAT_ID") or "").strip()
+    # notification_chat_id: строка/список/через запятую. Пусто → из .env <КОД_ОТДЕЛА>_CHAT_ID
+    # (marketing → MARKETING_CHAT_ID, it → IT_CHAT_ID), там тоже можно несколько через запятую.
+    chat_ids = _parse_chat_ids(raw.get("notification_chat_id"))
+    if not chat_ids:
+        chat_ids = _parse_chat_ids(os.getenv(f"{code.upper()}_CHAT_ID"))
 
     # У маркетинга ещё и план/сегмент подхватываются из .env — обратная совместимость.
     if code == "marketing":
@@ -106,7 +115,7 @@ def _parse_department(code: str, raw: dict, cfg: Config) -> Department:
         planner_plan_id=plan_id,
         planner_bucket_id=bucket_id,
         planner_bucket_name=bucket_name,
-        notification_chat_id=chat_id,
+        notification_chat_ids=chat_ids,
         assignees=assignees,
         request_types=request_types,
         bucket_status=bucket_status,
