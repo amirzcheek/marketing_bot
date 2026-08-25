@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import date, datetime, timezone
 from html import escape
 
-from .constants import BUCKET_STATUS, NO_DEADLINE, URGENT_CATEGORY
+from .constants import BUCKET_STATUS, CATEGORY_DEPARTMENTS, NO_DEADLINE, URGENT_CATEGORY
 
 MAX_TITLE_GIST = 60
 
@@ -33,8 +33,16 @@ class Attachment:
 @dataclass
 class Ticket:
     number: str = ""
+    # target_department — отдел-исполнитель (куда идёт заявка); маршрутизация по нему
+    target_department: str = "marketing"  # код отдела из реестра
+    target_department_name: str = ""
+    planner_plan_id: str = ""  # план отдела-исполнителя (резолвится роутером)
+    assignees: list[str] = field(default_factory=list)
+    route_key: str = ""
+    # department — подразделение ЗАЯВИТЕЛЯ (откуда подаёт); теперь просто атрибут
     department: str = ""
-    task_type: str = ""
+    request_type: str = ""  # ключ типа обращения
+    task_type: str = ""  # человекочитаемое название типа
     category: str = ""  # метка Planner по типу задачи, пусто для «Другое»
     description: str = ""  # исходный текст пользователя
     description_normalized: str = ""  # результат LLM, может быть пустым
@@ -57,7 +65,13 @@ class Ticket:
     # --- метки Planner -----------------------------------------------------
 
     def applied_categories(self) -> dict[str, bool]:
-        """Метки Planner: тип задачи + пометка срочности."""
+        """Метки Planner: тип задачи + пометка срочности.
+
+        Только для отделов, у чьего плана метки настроены (сейчас маркетинг).
+        У остальных планов слотов нет — вернём пусто, чтобы не вешать безымянные теги.
+        """
+        if self.target_department not in CATEGORY_DEPARTMENTS:
+            return {}
         cats: dict[str, bool] = {}
         if self.category:
             cats[self.category] = True
@@ -109,19 +123,23 @@ class Ticket:
         return d.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def task_status(task: dict, bucket_names: dict[str, str]) -> str:
+def task_status(
+    task: dict, bucket_names: dict[str, str], bucket_status: dict[str, str] | None = None
+) -> str:
     """Статус заявки для заявителя.
 
-    Основной источник — сегмент, по которому маркетолог двигает карточку.
+    Основной источник — сегмент, по которому исполнитель двигает карточку.
     Отметка «Завершено» (percentComplete=100) перекрывает сегмент: её ставят прямо
-    на карточке, не перетаскивая задачу.
+    на карточке, не перетаскивая задачу. bucket_status — маппинг сегмент→статус отдела
+    (у каждого отдела своя доска); по умолчанию общий BUCKET_STATUS.
     """
+    mapping = bucket_status or BUCKET_STATUS
     if (task.get("percentComplete") or 0) >= 100:
         return "✅ Готово"
 
     bucket_name = bucket_names.get(task.get("bucketId") or "")
     if bucket_name:
-        return BUCKET_STATUS.get(bucket_name, bucket_name)
+        return mapping.get(bucket_name, bucket_name)
 
     return status_from_percent(task.get("percentComplete"))
 
@@ -151,31 +169,40 @@ def status_from_percent(percent: int | None) -> str:
     return "🆕 Новая"
 
 
-def request_card_html(row: dict, status: str) -> str:
+def request_card_html(row: dict, status: str, target_name: str = "") -> str:
     """Карточка заявки из базы + актуальный статус из Planner."""
     e = escape
-    return "\n".join(
-        [
-            f"<b>Заявка {e(row['id'])}</b>",
-            f"<b>Статус:</b> {e(status)}",
-            "",
-            f"<b>Департамент:</b> {e(row['department'] or '—')}",
-            f"<b>Тип задачи:</b> {e(row['task_type'] or '—')}",
-            f"<b>Суть:</b> {e(row['summary'] or '—')}",
-            f"<b>Дедлайн:</b> {e(row['deadline'] or NO_DEADLINE)}",
-            f"<b>Приоритет:</b> {e(row['priority'] or '—')}",
-            f"<b>Подана:</b> {e(row['created_at'] or '—')}",
-        ]
-    )
+    lines = [
+        f"<b>Заявка {e(row['id'])}</b>",
+        f"<b>Статус:</b> {e(status)}",
+        "",
+    ]
+    if target_name:
+        lines.append(f"<b>Отдел:</b> {e(target_name)}")
+    lines += [
+        f"<b>Подразделение заявителя:</b> {e(row['department'] or '—')}",
+        f"<b>Тип обращения:</b> {e(row['task_type'] or '—')}",
+        f"<b>Суть:</b> {e(row['summary'] or '—')}",
+        f"<b>Дедлайн:</b> {e(row['deadline'] or NO_DEADLINE)}",
+        f"<b>Приоритет:</b> {e(row['priority'] or '—')}",
+        f"<b>Подана:</b> {e(row['created_at'] or '—')}",
+    ]
+    return "\n".join(lines)
 
 
-def new_number() -> str:
+# префикс номера по отделу-исполнителю (историю MKT-… не ломаем)
+NUMBER_PREFIX = {"marketing": "MKT", "it": "IT"}
+
+
+def new_number(target_code: str = "marketing") -> str:
+    prefix = NUMBER_PREFIX.get(target_code, (target_code[:4] or "REQ").upper())
     suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
-    return f"MKT-{date.today():%Y%m%d}-{suffix}"
+    return f"{prefix}-{date.today():%Y%m%d}-{suffix}"
 
 
 def planner_title(t: Ticket) -> str:
-    return f"[{t.task_type}] {t.gist} — {t.department}"
+    who = f" — {t.department}" if t.department else ""
+    return f"[{t.task_type}] {t.gist}{who}"
 
 
 def planner_description(t: Ticket) -> str:
@@ -183,8 +210,9 @@ def planner_description(t: Ticket) -> str:
     lines = [
         f"Заявка № {t.number}",
         "",
-        f"Департамент: {t.department}",
-        f"Тип задачи: {t.task_type}",
+        f"Отдел-исполнитель: {t.target_department_name or t.target_department}",
+        f"Подразделение заявителя: {t.department or '—'}",
+        f"Тип обращения: {t.task_type}",
         f"Приоритет: {t.priority}",
         f"Дедлайн: {t.deadline or NO_DEADLINE}",
         f"Контакт: {t.contact}",
@@ -220,23 +248,23 @@ def attachments_note(t: Ticket) -> str:
 
     uploaded = t.uploaded
     if uploaded and len(uploaded) == total:
-        head = f"📎 Материалов приложено: {total} (в задаче + чат маркетинга)"
+        head = f"📎 Материалов приложено: {total} (в задаче + чат отдела)"
     elif uploaded:
         head = (
             f"📎 Материалов приложено: {total} — из них {len(uploaded)} в задаче, "
-            "остальные только в чате маркетинга"
+            "остальные только в чате отдела"
         )
     else:
-        head = f"📎 Материалов приложено: {total} — материалы в чате маркетинга (SharePoint недоступен)"
+        head = f"📎 Материалов приложено: {total} — материалы в чате отдела (SharePoint недоступен)"
 
     lines = [head]
     for a in t.attachments:
         if a.uploaded:
             mark = "прикреплён к задаче"
         elif a.too_large:
-            mark = f"{a.size_mb}, слишком большой для загрузки — только в чате маркетинга"
+            mark = f"{a.size_mb}, слишком большой для загрузки — только в чате отдела"
         else:
-            mark = "только в чате маркетинга"
+            mark = "только в чате отдела"
         lines.append(f"  • {a.file_name} — {mark}")
     return "\n".join(lines)
 
@@ -247,8 +275,9 @@ def summary_html(t: Ticket) -> str:
     lines = [
         "<b>📋 Проверьте заявку</b>",
         "",
-        f"<b>Департамент:</b> {e(t.department)}",
-        f"<b>Тип задачи:</b> {e(t.task_type)}",
+        f"<b>Кому (отдел):</b> {e(t.target_department_name or t.target_department)}",
+        f"<b>Ваше подразделение:</b> {e(t.department or '—')}",
+        f"<b>Тип обращения:</b> {e(t.task_type)}",
         f"<b>Описание:</b> {e(t.description)}",
     ]
     if t.description_normalized:
@@ -285,7 +314,8 @@ def notification_html(t: Ticket) -> str:
     lines = [
         head,
         "",
-        f"<b>Департамент:</b> {e(t.department)}",
+        f"<b>Отдел:</b> {e(t.target_department_name or t.target_department)}",
+        f"<b>Подразделение заявителя:</b> {e(t.department or '—')}",
         f"<b>Тип:</b> {e(t.task_type)}",
         f"<b>Приоритет:</b> {e(t.priority)}",
         f"<b>Дедлайн:</b> {e(t.deadline or NO_DEADLINE)}",

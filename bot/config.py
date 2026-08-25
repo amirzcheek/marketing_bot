@@ -51,6 +51,8 @@ class Config:
     llm_timeout: int
     llm_normalize: bool
 
+    departments_config: str
+
     requests_log_path: Path
     fallback_log_path: Path
     requests_db_path: Path
@@ -97,6 +99,7 @@ def load_config() -> Config:
         llm_normalize=_bool("LLM_NORMALIZE", True),
         requests_log_path=data_dir / "requests.jsonl",
         fallback_log_path=data_dir / "planner_fallback.jsonl",
+        departments_config=_str("DEPARTMENTS_CONFIG", "/app/departments.yaml"),
         requests_db_path=Path(_str("REQUESTS_DB_PATH", str(data_dir / "requests.db"))),
         log_level=_str("LOG_LEVEL", "INFO").upper(),
         api_port=_int("API_PORT", 8080),

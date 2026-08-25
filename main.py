@@ -9,9 +9,11 @@ from telegram.ext import Application, Defaults, PersistenceInput, PicklePersiste
 from bot.api import ApiServer
 from bot.config import load_config
 from bot.db import RequestsDB
+from bot.departments import load_registry
 from bot.graph import PlannerClient
 from bot.handlers import register
 from bot.llm import LLMClient
+from bot.router import TicketRouter
 
 log = logging.getLogger("marketing-bot")
 
@@ -29,7 +31,12 @@ async def _post_init(app: Application) -> None:
     await app.bot_data["db"].init()
 
     # HTTP API поднимаем в этом же loop'е, параллельно polling'у
-    api = ApiServer(app.bot_data["config"], app.bot_data["db"], app.bot_data["planner"])
+    api = ApiServer(
+        app.bot_data["config"],
+        app.bot_data["db"],
+        app.bot_data["planner"],
+        app.bot_data["registry"],
+    )
     await api.start()
     app.bot_data["api"] = api
 
@@ -90,10 +97,19 @@ def main() -> None:
         .build()
     )
 
+    registry = load_registry(cfg)
     app.bot_data["config"] = cfg
     app.bot_data["llm"] = LLMClient(cfg)
     app.bot_data["planner"] = PlannerClient(cfg) if cfg.planner_enabled else None
     app.bot_data["db"] = RequestsDB(cfg.requests_db_path)
+    app.bot_data["registry"] = registry
+    app.bot_data["router"] = TicketRouter(registry)
+
+    enabled = registry.enabled()
+    log.info(
+        "Отделы-исполнители: %s",
+        ", ".join(f"{d.name} (chat={'да' if d.notification_chat_id else 'НЕТ'})" for d in enabled),
+    )
 
     if not cfg.planner_enabled:
         log.warning("PLANNER_ENABLED=false — заявки только логируются в %s", cfg.requests_log_path)

@@ -8,8 +8,11 @@ services:
       DATA_DIR: /data
       # jsonl-логи и SQLite «Мои заявки» — на volume, переживают пересборку контейнера
       REQUESTS_DB_PATH: /data/requests.db
+      DEPARTMENTS_CONFIG: /app/departments.yaml
     volumes:
       - ./data:/data
+      # реестр отделов правится на хосте; применяется через docker compose restart (без пересборки)
+      - ./departments.yaml:/app/departments.yaml:ro
     networks:
       - platform
     # HTTP API доступен другим контейнерам сети как marketing-bot:8080.

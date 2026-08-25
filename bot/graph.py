@@ -1,4 +1,8 @@
-"""Microsoft Graph: Planner (задачи) + SharePoint группы (файлы). Client credentials flow."""
+"""Microsoft Graph: Planner (задачи) + SharePoint группы (файлы). Client credentials flow.
+
+Мультиплановый: план (отдел-исполнитель) приходит в методы параметром, а не из глобального
+env. Кеши сегментов/групп/имён — по plan_id.
+"""
 
 import asyncio
 import logging
@@ -44,10 +48,11 @@ class PlannerClient:
         self._token: str | None = None
         self._token_expires_at: float = 0.0
         self._token_lock = asyncio.Lock()
-        self._bucket_id: str | None = cfg.planner_bucket_id or None
-        self._group_id: str | None = None
-        self._bucket_names: dict[str, str] = {}
-        self._bucket_names_at: float = 0.0
+        # всё, что зависит от плана, — кешируем по plan_id
+        self._bucket_ids: dict[str, str] = {}
+        self._group_ids: dict[str, str] = {}
+        self._bucket_names_cache: dict[str, tuple[dict[str, str], float]] = {}
+        self._user_ids: dict[str, str | None] = {}  # email -> AAD id (или None, если не найден)
 
     async def _http(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -63,7 +68,6 @@ class PlannerClient:
 
     async def _get_token(self) -> str:
         async with self._token_lock:
-            # обновляем за 60 секунд до истечения
             if self._token and time.monotonic() < self._token_expires_at - 60:
                 return self._token
 
@@ -107,27 +111,32 @@ class PlannerClient:
             log.error(
                 "Graph %s: %s %s — доступ запрещён. Проверь права приложения (тип Application) "
                 "и admin consent в Entra: Tasks.ReadWrite.All — задачи Planner, "
-                "Group.ReadWrite.All — группа плана, Sites.ReadWrite.All — файлы в SharePoint. "
-                "Также проверь, что приложение имеет доступ к группе плана %s. Ответ: %s",
+                "Group.ReadWrite.All — группа плана, Sites.ReadWrite.All — файлы в SharePoint, "
+                "User.Read.All — назначение исполнителей. Также проверь, что приложение имеет "
+                "доступ к нужной группе плана. Ответ: %s",
                 action,
                 resp.status_code,
                 resp.reason_phrase,
-                self.cfg.planner_plan_id,
                 body,
             )
         else:
             log.error("Graph %s: HTTP %s. Ответ: %s", action, resp.status_code, body)
         return GraphError(f"{action}: HTTP {resp.status_code}")
 
-    # --- planner ------------------------------------------------------------
+    # --- planner: сегменты --------------------------------------------------
 
-    async def _resolve_bucket_id(self) -> str:
-        if self._bucket_id:
-            return self._bucket_id
+    async def _resolve_bucket_id(
+        self, plan_id: str, bucket_id_hint: str, bucket_name_hint: str
+    ) -> str:
+        if bucket_id_hint:
+            return bucket_id_hint
+        if plan_id in self._bucket_ids:
+            return self._bucket_ids[plan_id]
 
         client = await self._http()
-        url = f"{GRAPH_BASE}/planner/plans/{self.cfg.planner_plan_id}/buckets"
-        resp = await client.get(url, headers=await self._headers())
+        resp = await client.get(
+            f"{GRAPH_BASE}/planner/plans/{plan_id}/buckets", headers=await self._headers()
+        )
         if resp.status_code != 200:
             raise self._explain(resp, "получение списка bucket'ов плана")
 
@@ -135,100 +144,49 @@ class PlannerClient:
         if not buckets:
             raise GraphError("в плане нет ни одного bucket — создай хотя бы один в Planner")
 
-        # Порядок bucket'ов в ответе Graph не совпадает с порядком в интерфейсе Planner,
-        # поэтому «первый» — это лотерея (у нас это оказалось «Завершено»).
-        # Сначала ищем bucket по имени, и только если не нашли — берём первый.
-        wanted = self.cfg.planner_bucket_name.strip().casefold()
+        # Порядок bucket'ов в ответе Graph не совпадает с интерфейсом Planner — ищем по имени.
+        wanted = (bucket_name_hint or "").strip().casefold()
         if wanted:
             for bucket in buckets:
                 if (bucket.get("name") or "").strip().casefold() == wanted:
-                    self._bucket_id = bucket["id"]
+                    self._bucket_ids[plan_id] = bucket["id"]
                     log.info(
-                        "Использую bucket %r (%s) — найден по PLANNER_BUCKET_NAME",
-                        bucket.get("name"),
-                        self._bucket_id,
+                        "План %s: bucket %r (%s) — найден по имени", plan_id, bucket.get("name"),
+                        bucket["id"],
                     )
-                    return self._bucket_id
+                    return bucket["id"]
             log.warning(
-                "Bucket с именем %r в плане не найден (есть: %s). Беру первый — проверь "
-                "PLANNER_BUCKET_NAME или задай PLANNER_BUCKET_ID явно.",
-                self.cfg.planner_bucket_name,
+                "План %s: bucket %r не найден (есть: %s). Беру первый.",
+                plan_id,
+                bucket_name_hint,
                 ", ".join(repr(b.get("name")) for b in buckets),
             )
 
-        self._bucket_id = buckets[0]["id"]
-        log.warning(
-            "Использую первый bucket плана: %r (%s)", buckets[0].get("name"), self._bucket_id
-        )
-        return self._bucket_id
+        self._bucket_ids[plan_id] = buckets[0]["id"]
+        log.warning("План %s: использую первый bucket %r", plan_id, buckets[0].get("name"))
+        return buckets[0]["id"]
 
-    async def create_task(
-        self,
-        *,
-        title: str,
-        due_date_iso: str | None,
-        priority: int,
-        applied_categories: dict[str, bool] | None = None,
-    ) -> dict[str, str]:
-        """Создаёт задачу в Planner (без details).
-
-        Описание и вложения пишутся отдельно через set_details — к тому моменту уже
-        известен результат загрузки файлов в SharePoint, и details пишутся ровно один раз.
-
-        Возвращает {"id": ..., "url": ...}. Бросает GraphError при неудаче.
-        """
-        client = await self._http()
-        bucket_id = await self._resolve_bucket_id()
-
-        body: dict[str, object] = {
-            "planId": self.cfg.planner_plan_id,
-            "bucketId": bucket_id,
-            "title": title[:255],
-            "priority": priority,
-        }
-        if due_date_iso:
-            body["dueDateTime"] = due_date_iso
-        if applied_categories:
-            body["appliedCategories"] = applied_categories
-
-        resp = await client.post(
-            f"{GRAPH_BASE}/planner/tasks", headers=await self._headers(), json=body
-        )
-        if resp.status_code not in (200, 201):
-            raise self._explain(resp, "создание задачи")
-
-        task_id = resp.json()["id"]
-        log.info("Задача Planner создана: %s", task_id)
-        return {
-            "id": task_id,
-            "url": f"https://tasks.office.com/{self.cfg.graph_tenant_id}/Home/Task/{task_id}",
-        }
-
-    async def bucket_names(self) -> dict[str, str]:
-        """id сегмента -> имя. Сегменты переименовывают редко, поэтому кешируем ненадолго."""
-        if self._bucket_names and time.monotonic() - self._bucket_names_at < BUCKET_CACHE_TTL:
-            return self._bucket_names
+    async def bucket_names(self, plan_id: str) -> dict[str, str]:
+        """id сегмента -> имя для плана. Кешируем на BUCKET_CACHE_TTL."""
+        cached = self._bucket_names_cache.get(plan_id)
+        if cached and time.monotonic() - cached[1] < BUCKET_CACHE_TTL:
+            return cached[0]
 
         client = await self._http()
         resp = await client.get(
-            f"{GRAPH_BASE}/planner/plans/{self.cfg.planner_plan_id}/buckets",
-            headers=await self._headers(),
+            f"{GRAPH_BASE}/planner/plans/{plan_id}/buckets", headers=await self._headers()
         )
         if resp.status_code != 200:
             raise self._explain(resp, "чтение сегментов плана")
 
-        self._bucket_names = {b["id"]: b["name"] for b in resp.json().get("value", [])}
-        self._bucket_names_at = time.monotonic()
-        return self._bucket_names
+        names = {b["id"]: b["name"] for b in resp.json().get("value", [])}
+        self._bucket_names_cache[plan_id] = (names, time.monotonic())
+        return names
 
-    async def list_plan_tasks(self) -> dict[str, dict]:
-        """Все задачи плана одним запросом: task_id -> задача.
-
-        Дешевле, чем дёргать GET /tasks/{id} по каждой заявке. Пагинацию Graph
-        отдаёт через @odata.nextLink — идём по ссылкам до конца.
-        """
+    async def list_plan_tasks(self, plan_id: str) -> dict[str, dict]:
+        """Все задачи плана одним запросом: task_id -> задача (с пагинацией по nextLink)."""
         client = await self._http()
-        url = f"{GRAPH_BASE}/planner/plans/{self.cfg.planner_plan_id}/tasks"
+        url = f"{GRAPH_BASE}/planner/plans/{plan_id}/tasks"
         result: dict[str, dict] = {}
         while url:
             resp = await client.get(url, headers=await self._headers())
@@ -240,8 +198,91 @@ class PlannerClient:
             url = data.get("@odata.nextLink")
         return result
 
+    # --- planner: исполнители ----------------------------------------------
+
+    async def _resolve_user_id(self, email: str) -> str | None:
+        """email -> AAD object id. None, если не нашли/нет прав (заявку не роняем)."""
+        email = email.strip()
+        if not email:
+            return None
+        if email in self._user_ids:
+            return self._user_ids[email]
+
+        client = await self._http()
+        resp = await client.get(
+            f"{GRAPH_BASE}/users/{quote(email)}?$select=id", headers=await self._headers()
+        )
+        if resp.status_code == 200:
+            self._user_ids[email] = resp.json().get("id")
+        else:
+            log.error(
+                "Не удалось найти пользователя %s (HTTP %s) — задача создастся без назначения. "
+                "Для назначения нужно право User.Read.All (Application) + admin consent.",
+                email,
+                resp.status_code,
+            )
+            self._user_ids[email] = None
+        return self._user_ids[email]
+
+    async def _assignments(self, emails: tuple[str, ...] | list[str]) -> dict:
+        assignments: dict[str, dict] = {}
+        for email in emails or ():
+            uid = await self._resolve_user_id(email)
+            if uid:
+                assignments[uid] = {
+                    "@odata.type": "microsoft.graph.plannerAssignment",
+                    "orderHint": " !",
+                }
+        return assignments
+
+    # --- planner: задачи ----------------------------------------------------
+
+    async def create_task(
+        self,
+        *,
+        plan_id: str,
+        bucket_id: str = "",
+        bucket_name: str = "",
+        title: str,
+        due_date_iso: str | None,
+        priority: int,
+        applied_categories: dict[str, bool] | None = None,
+        assignees: tuple[str, ...] | list[str] | None = None,
+    ) -> dict[str, str]:
+        """Создаёт задачу в указанном плане (без details). Возвращает {"id","url"}."""
+        client = await self._http()
+        resolved_bucket = await self._resolve_bucket_id(plan_id, bucket_id, bucket_name)
+
+        body: dict[str, object] = {
+            "planId": plan_id,
+            "bucketId": resolved_bucket,
+            "title": title[:255],
+            "priority": priority,
+        }
+        if due_date_iso:
+            body["dueDateTime"] = due_date_iso
+        if applied_categories:
+            body["appliedCategories"] = applied_categories
+        if assignees:
+            assignments = await self._assignments(assignees)
+            if assignments:
+                body["assignments"] = assignments
+
+        resp = await client.post(
+            f"{GRAPH_BASE}/planner/tasks", headers=await self._headers(), json=body
+        )
+        if resp.status_code not in (200, 201):
+            raise self._explain(resp, "создание задачи")
+
+        task_id = resp.json()["id"]
+        log.info("Задача Planner создана: %s (план %s)", task_id, plan_id)
+        return {
+            "id": task_id,
+            "url": f"https://tasks.office.com/{self.cfg.graph_tenant_id}/Home/Task/{task_id}",
+        }
+
     async def get_task(self, task_id: str) -> dict | None:
-        """Задача целиком или None, если её больше нет. Бросает GraphError на прочих ошибках."""
+        """Задача целиком или None, если её больше нет. task_id глобален (план не нужен)."""
         client = await self._http()
         resp = await client.get(
             f"{GRAPH_BASE}/planner/tasks/{task_id}", headers=await self._headers()
@@ -289,14 +330,14 @@ class PlannerClient:
 
     # --- SharePoint ---------------------------------------------------------
 
-    async def _resolve_group_id(self) -> str:
-        """groupId группы, которой принадлежит план — в её библиотеке лежат файлы."""
-        if self._group_id:
-            return self._group_id
+    async def _resolve_group_id(self, plan_id: str) -> str:
+        """groupId группы плана — в её библиотеке лежат файлы. Кеш по plan_id."""
+        if plan_id in self._group_ids:
+            return self._group_ids[plan_id]
 
         client = await self._http()
         resp = await client.get(
-            f"{GRAPH_BASE}/planner/plans/{self.cfg.planner_plan_id}", headers=await self._headers()
+            f"{GRAPH_BASE}/planner/plans/{plan_id}", headers=await self._headers()
         )
         if resp.status_code != 200:
             raise self._explain(resp, "чтение плана (определение группы)")
@@ -306,17 +347,18 @@ class PlannerClient:
         if not group_id:
             raise GraphError("не удалось определить группу плана (owner пуст)")
 
-        self._group_id = group_id
-        log.info("Группа плана: %s", group_id)
+        self._group_ids[plan_id] = group_id
+        log.info("Группа плана %s: %s", plan_id, group_id)
         return group_id
 
-    async def upload_file(self, local_path: Path, *, ticket_number: str, file_name: str) -> str:
-        """Загружает файл в библиотеку группы и возвращает webUrl.
+    async def upload_file(
+        self, local_path: Path, *, plan_id: str, ticket_number: str, file_name: str
+    ) -> str:
+        """Загружает файл в библиотеку группы плана и возвращает webUrl.
 
-        Путь: <SHAREPOINT_ROOT_FOLDER>/<номер заявки>/<имя файла> — материалы одной
-        заявки лежат вместе. Бросает GraphError.
+        Путь: <SHAREPOINT_ROOT_FOLDER>/<номер заявки>/<имя файла>.
         """
-        group_id = await self._resolve_group_id()
+        group_id = await self._resolve_group_id(plan_id)
         safe_name = sanitize_filename(file_name)
         item_path = quote(f"{SHAREPOINT_ROOT_FOLDER}/{ticket_number}/{safe_name}")
         base = f"{GRAPH_BASE}/groups/{group_id}/drive/root:/{item_path}"
@@ -353,7 +395,6 @@ class PlannerClient:
             raise self._explain(resp, "создание upload session")
 
         upload_url = resp.json()["uploadUrl"]
-        # upload session — предавторизованный URL, токен в заголовках не нужен
         with local_path.open("rb") as fh:
             start = 0
             while start < size:

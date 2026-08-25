@@ -57,7 +57,11 @@ async def health(request: web.Request) -> web.Response:
 
 async def stats(request: web.Request) -> web.Response:
     db: RequestsDB = request.app["db"]
-    return _json(await db.stats())
+    # необязательный разрез по отделу-исполнителю (department_target или target_department)
+    target = (
+        request.query.get("department_target") or request.query.get("target_department") or ""
+    ).strip()
+    return _json(await db.stats(target))
 
 
 def _planner_url(cfg: Config, task_id: str | None) -> str:
@@ -82,8 +86,14 @@ async def tickets(request: web.Request) -> web.Response:
 
     filters = {
         key: request.query.get(key, "").strip()
-        for key in ("department", "type", "status", "priority", "date_from", "date_to", "q")
+        for key in (
+            "target_department", "department", "type", "status",
+            "priority", "date_from", "date_to", "q",
+        )
     }
+    # синоним department_target → target_department
+    if not filters["target_department"]:
+        filters["target_department"] = request.query.get("department_target", "").strip()
     page = _int_param(request, "page", 1, 1, 10_000_000)
     per_page = _int_param(request, "per_page", DEFAULT_PER_PAGE, 1, MAX_PER_PAGE)
 
@@ -92,7 +102,9 @@ async def tickets(request: web.Request) -> web.Response:
         {
             "id": r["id"],
             "created_at": r["created_at"],
-            "department": r["department"],
+            "target_department": r["target_department"] or "marketing",
+            "department": r["department"],  # подразделение заявителя
+            "request_type": r["request_type"],
             "task_type": r["task_type"],
             "summary": r["summary"],
             "deadline": r["deadline"],
@@ -111,6 +123,16 @@ async def tickets(request: web.Request) -> web.Response:
 # --- фоновый рефрешер статусов ---------------------------------------------
 
 
+def _plan_for(app: web.Application, row: dict) -> str:
+    """План заявки: из строки, иначе — по отделу из реестра (старые строки без plan_id)."""
+    plan = row.get("planner_plan_id")
+    if plan:
+        return plan
+    registry = app.get("registry")
+    dep = registry.get(row.get("target_department") or "marketing") if registry else None
+    return dep.planner_plan_id if dep else ""
+
+
 async def _refresh_once(app: web.Application) -> None:
     db: RequestsDB = app["db"]
     planner: PlannerClient | None = app["planner"]
@@ -121,19 +143,30 @@ async def _refresh_once(app: web.Application) -> None:
     if not active:
         return
 
-    # одним запросом забираем все задачи плана вместо N штук по одной
-    tasks = await planner.list_plan_tasks()
+    # группируем активные заявки по плану и обходим каждый план ОДНИМ запросом
+    by_plan: dict[str, list[dict]] = {}
+    for row in active:
+        plan = _plan_for(app, row)
+        if plan:
+            by_plan.setdefault(plan, []).append(row)
+
     now = datetime.now().isoformat(timespec="seconds")
     updates: list[tuple[str, str, str]] = []
-    for row in active:
-        task = tasks.get(row["planner_task_id"])
-        if task is None:
-            continue  # задача удалена из плана — сохраняем последний известный статус
-        updates.append((api_status(task.get("percentComplete")), now, row["id"]))
+    for plan_id, rows in by_plan.items():
+        try:
+            tasks = await planner.list_plan_tasks(plan_id)
+        except GraphError as exc:
+            log.warning("Рефрешер: план %s недоступен: %s", plan_id, exc)
+            continue
+        for row in rows:
+            task = tasks.get(row["planner_task_id"])
+            if task is None:
+                continue  # задача удалена из плана — сохраняем последний известный статус
+            updates.append((api_status(task.get("percentComplete")), now, row["id"]))
 
     await db.update_statuses(updates)
     if updates:
-        log.info("Статусы заявок обновлены: %d", len(updates))
+        log.info("Статусы заявок обновлены: %d (планов: %d)", len(updates), len(by_plan))
 
 
 async def status_refresher(app: web.Application) -> None:
@@ -152,11 +185,12 @@ async def status_refresher(app: web.Application) -> None:
 # --- запуск/остановка вместе с ботом ---------------------------------------
 
 
-def build_app(cfg: Config, db: RequestsDB, planner: PlannerClient | None) -> web.Application:
+def build_app(cfg: Config, db: RequestsDB, planner: PlannerClient | None, registry=None) -> web.Application:
     app = web.Application(middlewares=[auth_middleware])
     app["config"] = cfg
     app["db"] = db
     app["planner"] = planner
+    app["registry"] = registry
     app.router.add_get("/health", health)
     app.router.add_get("/api/stats", stats)
     app.router.add_get("/api/tickets", tickets)
@@ -166,9 +200,9 @@ def build_app(cfg: Config, db: RequestsDB, planner: PlannerClient | None) -> web
 class ApiServer:
     """Держит AppRunner и фоновую задачу; поднимается в loop'е бота."""
 
-    def __init__(self, cfg: Config, db: RequestsDB, planner: PlannerClient | None):
+    def __init__(self, cfg: Config, db: RequestsDB, planner: PlannerClient | None, registry=None):
         self.cfg = cfg
-        self.app = build_app(cfg, db, planner)
+        self.app = build_app(cfg, db, planner, registry)
         self._runner: web.AppRunner | None = None
         self._refresher: asyncio.Task | None = None
 

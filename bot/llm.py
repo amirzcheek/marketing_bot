@@ -10,7 +10,6 @@ import re
 import httpx
 
 from .config import Config
-from .constants import TASK_TYPES
 
 log = logging.getLogger(__name__)
 
@@ -101,11 +100,10 @@ class LLMClient:
             return None
         return cleaned
 
-    async def suggest_type(self, description: str) -> str | None:
-        """Подсказка типа задачи. Только подсказка, ничего не навязываем."""
-        if not self.enabled or not description.strip():
+    async def suggest_type(self, description: str, known: list[str]) -> str | None:
+        """Подсказка типа обращения из списка типов выбранного отдела. Ничего не навязываем."""
+        if not self.enabled or not description.strip() or not known:
             return None
-        known = [name for _, name in TASK_TYPES.values() if name]
         raw = await self._chat(
             SUGGEST_PROMPT.format(types=", ".join(known)),
             description.strip(),

@@ -1,0 +1,46 @@
+# Реестр отделов-исполнителей (KNUS Service Desk).
+# Куда уходит заявка — определяет ВЫБРАННЫЙ здесь отдел (target_department), а не .env.
+#
+# Как править на сервере:
+#   1) отредактировать этот файл (он смонтирован в контейнер, см. docker-compose.yml);
+#   2) применить: docker compose restart marketing-bot
+#      (пересборка образа не нужна — файл читается при старте).
+#
+# Обязательное поле у enabled-отдела: planner_plan_id.
+# Пустые поля отдела marketing подхватываются из .env (обратная совместимость):
+#   planner_plan_id←PLANNER_PLAN_ID, planner_bucket_id←PLANNER_BUCKET_ID,
+#   planner_bucket_name←PLANNER_BUCKET_NAME, notification_chat_id←MARKETING_CHAT_ID.
+
+departments:
+  marketing:
+    name: Отдел маркетинга
+    enabled: true
+    planner_plan_id: KKQCgfi02UWlddrbSFkLY5gABUAH
+    planner_bucket_id: ""            # пусто → бот найдёт сегмент по имени
+    planner_bucket_name: "📥 Новые заявки"
+    notification_chat_id: ""         # пусто → берётся MARKETING_CHAT_ID из .env
+    assignees: []                    # пусто = общая очередь
+    request_types: [design, video, social_media, website, polygraphy, event, other]
+    # сегмент доски → человекочитаемый статус для заявителя (необязательно)
+    bucket_status:
+      "📥 Новые заявки": "🆕 Принята, ждёт очереди"
+      "✅ Принято в работу": "✅ Принята в работу"
+      "🎨 В производстве": "🎨 В работе"
+      "👀 На согласовании": "👀 На согласовании"
+      "⏸ Ожидает уточнений": "⏸ Нужны уточнения — с вами свяжутся"
+      "🚀 Готово": "✅ Готово"
+
+  it:
+    name: Департамент информационных технологий
+    enabled: true
+    planner_plan_id: KQtVSXu0FEuZbqIuW8TIt5gAG0hT
+    planner_bucket_id: ""            # пусто → бот найдёт сегмент по имени
+    planner_bucket_name: "Новые"     # у плана ДИТ сегмент называется именно так
+    notification_chat_id: ""         # ← ВПИШИ chat_id чата ДИТ (см. README, /myid)
+    assignees: []                    # ← при желании впиши email-ы саппорта ДИТ; пусто = общая очередь
+    request_types: [account, email, hardware, network, software, website, consultation, other]
+    bucket_status:
+      "Новые": "🆕 Принята, ждёт очереди"
+      "В работе": "🔧 В работе"
+      "На проверке": "👀 На проверке"
+      "Выполнено": "✅ Выполнено"

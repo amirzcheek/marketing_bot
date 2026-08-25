@@ -25,13 +25,15 @@ from .constants import (
     DEPARTMENTS,
     NO_DEADLINE,
     PRIORITIES,
+    REQUEST_TYPES,
     TASK_TYPE_CATEGORY,
-    TASK_TYPES,
     TELEGRAM_DOWNLOAD_LIMIT,
 )
 from .db import RequestsDB
+from .departments import DepartmentRegistry
 from .graph import GraphError, PlannerClient, sanitize_filename
 from .llm import LLMClient
+from .router import TicketRouter
 from .storage import log_fallback, log_request
 from .ticket import (
     Attachment,
@@ -49,6 +51,7 @@ log = logging.getLogger(__name__)
 
 (
     MENU,
+    TARGET,
     DEPARTMENT,
     DEPARTMENT_OTHER,
     TASK_TYPE,
@@ -61,7 +64,7 @@ log = logging.getLogger(__name__)
     CONTACT,
     CONFIRM,
     EDIT_MENU,
-) = range(13)
+) = range(14)
 
 MIN_DESCRIPTION_LEN = 10
 
@@ -85,19 +88,37 @@ def _menu_kb() -> InlineKeyboardMarkup:
     )
 
 
-def _departments_kb(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+def _targets_kb(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+    router: TicketRouter = context.bot_data["router"]
     rows = [
-        [InlineKeyboardButton(label, callback_data=f"dep:{key}")]
-        for key, (label, _) in DEPARTMENTS.items()
+        [InlineKeyboardButton(r.name, callback_data=f"tgt:{r.code}")]
+        for r in router.targets()
     ]
     rows.append(_back_row(context, "menu"))
     return InlineKeyboardMarkup(rows)
 
 
-def _task_types_kb(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+def _departments_kb(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+    registry: DepartmentRegistry = context.bot_data["registry"]
+    # если отдел один, шага выбора получателя не было — «Назад» ведёт в меню
+    back = "menu" if registry.single_enabled is not None else "target"
     rows = [
-        [InlineKeyboardButton(label, callback_data=f"type:{key}")]
-        for key, (label, _) in TASK_TYPES.items()
+        [InlineKeyboardButton(label, callback_data=f"dep:{key}")]
+        for key, (label, _) in DEPARTMENTS.items()
+    ]
+    rows.append(_back_row(context, back))
+    return InlineKeyboardMarkup(rows)
+
+
+def _task_types_kb(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+    """Кнопки типов — только те, что настроены у выбранного отдела-исполнителя."""
+    registry: DepartmentRegistry = context.bot_data["registry"]
+    ticket = _ticket(context)
+    keys = registry.request_types(ticket.target_department) or ("other",)
+    rows = [
+        [InlineKeyboardButton(REQUEST_TYPES[key][0], callback_data=f"type:{key}")]
+        for key in keys
+        if key in REQUEST_TYPES
     ]
     rows.append(_back_row(context, "department"))
     return InlineKeyboardMarkup(rows)
@@ -153,8 +174,8 @@ def _confirm_kb() -> InlineKeyboardMarkup:
 def _edit_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("Департамент", callback_data="edit:department")],
-            [InlineKeyboardButton("Тип задачи", callback_data="edit:type")],
+            [InlineKeyboardButton("Ваше подразделение", callback_data="edit:department")],
+            [InlineKeyboardButton("Тип обращения", callback_data="edit:type")],
             [InlineKeyboardButton("Описание", callback_data="edit:description")],
             [InlineKeyboardButton("Материалы", callback_data="edit:attachments")],
             [InlineKeyboardButton("Дедлайн", callback_data="edit:deadline")],
@@ -201,31 +222,40 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await _send(
         update,
         f"👋 Здравствуйте, {escape(update.effective_user.first_name or 'коллега')}!\n\n"
-        "Это бот приёма заявок в <b>отдел маркетинга КНУС</b>.\n\n"
+        "Это бот приёма заявок <b>KNUS Service Desk</b>.\n\n"
         "Что хотите сделать?",
         _menu_kb(),
     )
     return MENU
 
 
+async def show_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await _send(
+        update,
+        "<b>Шаг: отдел-исполнитель.</b> Кому адресована заявка?",
+        _targets_kb(context),
+    )
+    return TARGET
+
+
 async def show_department(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await _send(
         update,
-        "<b>Шаг 1/7.</b> Выберите ваш департамент:",
+        "<b>Шаг: ваше подразделение.</b> Откуда вы подаёте заявку?",
         _departments_kb(context),
     )
     return DEPARTMENT
 
 
 async def show_task_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await _send(update, "<b>Шаг 2/7.</b> Какой тип задачи?", _task_types_kb(context))
+    await _send(update, "<b>Шаг: тип обращения.</b> Что нужно?", _task_types_kb(context))
     return TASK_TYPE
 
 
 async def show_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await _send(
         update,
-        "<b>Шаг 3/7.</b> Опишите задачу: что нужно сделать, для чего, пожелания по формату.",
+        "<b>Шаг: описание.</b> Опишите задачу: что нужно, для чего, пожелания по формату.",
         _back_only_kb(context, "type"),
     )
     return DESCRIPTION
@@ -234,7 +264,7 @@ async def show_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def show_attach_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await _send(
         update,
-        "<b>Шаг 4/7.</b> Приложить материалы? (фото, видео, документы — примеры дизайна, референсы)",
+        "<b>Шаг: материалы.</b> Приложить файлы? (фото, видео, документы — примеры, референсы, скриншоты)",
         _attach_ask_kb(context),
     )
     return ATTACH_ASK
@@ -243,21 +273,21 @@ async def show_attach_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def show_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await _send(
         update,
-        "<b>Шаг 5/7.</b> К какому сроку нужно? Введите дату в формате <code>ДД.ММ.ГГГГ</code>.",
+        "<b>Шаг: срок.</b> К какому сроку нужно? Введите дату в формате <code>ДД.ММ.ГГГГ</code>.",
         _deadline_kb(context),
     )
     return DEADLINE
 
 
 async def show_priority(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await _send(update, "<b>Шаг 6/7.</b> Насколько срочно?", _priority_kb(context))
+    await _send(update, "<b>Шаг: приоритет.</b> Насколько срочно?", _priority_kb(context))
     return PRIORITY
 
 
 async def show_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await _send(
         update,
-        "<b>Шаг 7/7.</b> Контакт для уточнений — имя и телефон или почта.\n"
+        "<b>Шаг: контакт.</b> Имя и телефон или почта для уточнений.\n"
         "Например: <code>Айгуль Смагулова, +7 701 123 45 67</code>",
         _back_only_kb(context, "priority"),
     )
@@ -286,14 +316,50 @@ async def open_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return await show_menu(update, context)
 
 
+def _apply_target(context: ContextTypes.DEFAULT_TYPE, code: str) -> bool:
+    """Записывает в заявку отдел-исполнителя из реестра. False — если отдела нет."""
+    router: TicketRouter = context.bot_data["router"]
+    route = router.route(code)
+    if route is None:
+        return False
+    ticket = _ticket(context)
+    ticket.target_department = route.code
+    ticket.target_department_name = route.name
+    ticket.planner_plan_id = route.plan_id
+    ticket.assignees = list(route.assignees)
+    ticket.route_key = route.code
+    return True
+
+
 async def menu_create(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.callback_query.answer()
     context.user_data["editing"] = False
+    registry: DepartmentRegistry = context.bot_data["registry"]
+
+    # один включённый отдел — шаг выбора получателя незачем показывать
+    single = registry.single_enabled
+    if single is not None:
+        _apply_target(context, single.code)
+        return await show_department(update, context)
+    return await show_target(update, context)
+
+
+async def target_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    code = query.data.split(":", 1)[1]
+    if not _apply_target(context, code):
+        await query.answer("Отдел недоступен", show_alert=True)
+        return await show_target(update, context)
+
+    if _editing(context):
+        return await show_summary(update, context)
     return await show_department(update, context)
 
 
 _NAV = {
     "menu": show_menu,
+    "target": show_target,
     "department": show_department,
     "type": show_task_type,
     "description": show_description,
@@ -355,18 +421,19 @@ async def task_type_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     query = update.callback_query
     await query.answer()
     key = query.data.split(":", 1)[1]
-    _, name = TASK_TYPES[key]
+    label, name = REQUEST_TYPES.get(key, ("", ""))
 
     if key == "other":
         await query.edit_message_text(
-            "✏️ Опишите тип задачи одним-двумя словами:",
+            "✏️ Опишите тип обращения одним-двумя словами:",
             reply_markup=_back_only_kb(context, "type"),
         )
         return TASK_TYPE_OTHER
 
     ticket = _ticket(context)
+    ticket.request_type = key
     ticket.task_type = name
-    ticket.category = TASK_TYPE_CATEGORY.get(key, "")
+    ticket.category = TASK_TYPE_CATEGORY.get(key, "")  # метка применится только к плану маркетинга
 
     if _editing(context):
         return await show_summary(update, context)
@@ -380,6 +447,7 @@ async def task_type_other(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return TASK_TYPE_OTHER
 
     ticket = _ticket(context)
+    ticket.request_type = "other"
     ticket.task_type = text[:100]
     ticket.category = ""  # произвольный тип метке не соответствует
 
@@ -407,7 +475,14 @@ async def description_entered(update: Update, context: ContextTypes.DEFAULT_TYPE
         normalized = await llm.normalize(ticket.description)
         if normalized:
             ticket.description_normalized = normalized
-        suggested = await llm.suggest_type(ticket.description)
+        # подсказку типа ищем среди типов ВЫБРАННОГО отдела
+        registry: DepartmentRegistry = context.bot_data["registry"]
+        known = [
+            REQUEST_TYPES[k][1]
+            for k in registry.request_types(ticket.target_department)
+            if k in REQUEST_TYPES and REQUEST_TYPES[k][1]
+        ]
+        suggested = await llm.suggest_type(ticket.description, known)
         if suggested:
             ticket.suggested_type = suggested
         try:
@@ -658,9 +733,18 @@ async def _submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     cfg: Config = context.bot_data["config"]
     planner: PlannerClient | None = context.bot_data.get("planner")
+    router: TicketRouter = context.bot_data["router"]
 
     ticket = _ticket(context)
-    ticket.number = new_number()
+    route = router.route(ticket.target_department)
+    if route is not None:
+        # на случай, если план не проставился раньше
+        ticket.planner_plan_id = route.plan_id
+        ticket.assignees = list(route.assignees)
+        ticket.target_department_name = route.name
+    notify_chat = route.notification_chat_id if route else cfg.marketing_chat_id
+
+    ticket.number = new_number(ticket.target_department)
     now = datetime.now()
     ticket.created_at = now.strftime("%d.%m.%Y %H:%M")
     user = update.effective_user
@@ -673,18 +757,24 @@ async def _submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if planner is None:
         error = "Planner отключён (PLANNER_ENABLED=false)"
         log.info("Заявка %s: Planner отключён, только локальный лог", ticket.number)
+    elif not ticket.planner_plan_id:
+        error = f"нет плана для отдела {ticket.target_department!r}"
+        log.error("Заявка %s: %s", ticket.number, error)
     else:
         try:
             created = await planner.create_task(
+                plan_id=ticket.planner_plan_id,
+                bucket_id=route.bucket_id if route else "",
+                bucket_name=route.bucket_name if route else "",
                 title=planner_title(ticket),
                 due_date_iso=ticket.deadline_iso(),
                 priority=ticket.priority_value,
                 applied_categories=ticket.applied_categories(),
+                assignees=ticket.assignees,
             )
             ticket.planner_task_id = created["id"]
             ticket.planner_task_url = created["url"]
-            # связь юзер→заявка нужна для «Мои заявки»; пишем только при успехе в Planner,
-            # иначе статус читать будет неоткуда
+            # связь юзер→заявка нужна для «Мои заявки»; пишем только при успехе в Planner
             db: RequestsDB = context.bot_data["db"]
             await db.add(ticket, now.isoformat(timespec="seconds"))
         except GraphError as exc:
@@ -697,14 +787,15 @@ async def _submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if error and planner is not None:
         await query.message.reply_text(
             f"⚠️ Заявка <b>{escape(ticket.number)}</b> временно не сохранена — "
-            "попробуйте позже или свяжитесь с отделом маркетинга напрямую.\n"
+            "попробуйте позже или свяжитесь с отделом напрямую.\n"
             "Мы записали её у себя, она не потеряется.",
             parse_mode=ParseMode.HTML,
         )
     else:
         text = (
             f"✅ Заявка <b>{escape(ticket.number)}</b> принята!\n\n"
-            f"Отдел маркетинга получил уведомление и свяжется по контакту:\n"
+            f"<b>{escape(ticket.target_department_name or ticket.target_department)}</b> "
+            f"получил уведомление и свяжется по контакту:\n"
             f"{escape(ticket.contact)}\n\n"
             f"Номер заявки пригодится, если будете уточнять статус."
         )
@@ -716,8 +807,8 @@ async def _submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await query.message.reply_text(text, parse_mode=ParseMode.HTML)
 
     # Быстрый путь: карточка и файлы по file_id — байты через бота не идут.
-    await _notify_marketing(context, ticket)
-    await _forward_attachments(context, ticket)
+    await _notify_target(context, ticket, notify_chat)
+    await _forward_attachments(context, ticket, notify_chat)
 
     # Медленный путь: каждый файл скачивается РОВНО ОДИН раз — ради SharePoint.
     if ticket.planner_task_id and ticket.uploadable:
@@ -756,10 +847,11 @@ async def _submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
-async def _forward_attachments(context: ContextTypes.DEFAULT_TYPE, ticket: Ticket) -> None:
-    """Пересылает файлы в чат маркетинга по file_id — без скачивания, мгновенно."""
-    cfg: Config = context.bot_data["config"]
-    if not cfg.marketing_chat_id or not ticket.attachments:
+async def _forward_attachments(
+    context: ContextTypes.DEFAULT_TYPE, ticket: Ticket, chat_id: str
+) -> None:
+    """Пересылает файлы в чат отдела по file_id — без скачивания, мгновенно."""
+    if not chat_id or not ticket.attachments:
         return
 
     senders = {
@@ -772,10 +864,10 @@ async def _forward_attachments(context: ContextTypes.DEFAULT_TYPE, ticket: Ticke
         send = senders.get(attachment.kind, context.bot.send_document)
         caption = f"📎 Заявка {ticket.number} — {attachment.file_name}"
         try:
-            await send(chat_id=cfg.marketing_chat_id, **{attachment.kind: attachment.file_id}, caption=caption)
+            await send(chat_id=chat_id, **{attachment.kind: attachment.file_id}, caption=caption)
         except TelegramError as exc:
             log.error(
-                "Заявка %s: не удалось переслать %s в чат маркетинга: %s",
+                "Заявка %s: не удалось переслать %s в чат отдела: %s",
                 ticket.number,
                 attachment.file_name,
                 exc,
@@ -783,7 +875,7 @@ async def _forward_attachments(context: ContextTypes.DEFAULT_TYPE, ticket: Ticke
 
 
 async def _upload_attachments(context: ContextTypes.DEFAULT_TYPE, ticket: Ticket) -> None:
-    """Скачивает файлы из Telegram (по разу) и грузит в библиотеку группы."""
+    """Скачивает файлы из Telegram (по разу) и грузит в библиотеку группы плана отдела."""
     planner: PlannerClient = context.bot_data["planner"]
     tmp_dir = Path(tempfile.mkdtemp(prefix=f"{ticket.number}_"))
     try:
@@ -793,11 +885,14 @@ async def _upload_attachments(context: ContextTypes.DEFAULT_TYPE, ticket: Ticket
                 tg_file = await context.bot.get_file(attachment.file_id)
                 await tg_file.download_to_drive(local_path)
                 attachment.sharepoint_url = await planner.upload_file(
-                    local_path, ticket_number=ticket.number, file_name=attachment.file_name
+                    local_path,
+                    plan_id=ticket.planner_plan_id,
+                    ticket_number=ticket.number,
+                    file_name=attachment.file_name,
                 )
                 log.info("Заявка %s: %s загружен в SharePoint", ticket.number, attachment.file_name)
             except (GraphError, TelegramError, OSError) as exc:
-                # Файл уже в чате маркетинга — заявку из-за этого не роняем.
+                # Файл уже в чате отдела — заявку из-за этого не роняем.
                 attachment.upload_error = str(exc)
                 log.error(
                     "Заявка %s: не удалось загрузить %s в SharePoint: %s",
@@ -811,23 +906,28 @@ async def _upload_attachments(context: ContextTypes.DEFAULT_TYPE, ticket: Ticket
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-async def _notify_marketing(context: ContextTypes.DEFAULT_TYPE, ticket: Ticket) -> None:
-    cfg: Config = context.bot_data["config"]
-    if not cfg.marketing_chat_id:
-        log.warning("MARKETING_CHAT_ID не задан — уведомление о заявке %s не отправлено", ticket.number)
+async def _notify_target(context: ContextTypes.DEFAULT_TYPE, ticket: Ticket, chat_id: str) -> None:
+    if not chat_id:
+        log.warning(
+            "Для отдела %r не задан notification_chat_id — уведомление о заявке %s не отправлено. "
+            "Впиши chat_id в departments.yaml.",
+            ticket.target_department,
+            ticket.number,
+        )
         return
     try:
         await context.bot.send_message(
-            chat_id=cfg.marketing_chat_id,
+            chat_id=chat_id,
             text=notification_html(ticket),
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
         )
     except TelegramError as exc:
         log.error(
-            "Не удалось отправить уведомление в MARKETING_CHAT_ID=%s: %s. "
-            "Убедись, что чат существует и пользователь/группа начали диалог с ботом.",
-            cfg.marketing_chat_id,
+            "Не удалось отправить уведомление в чат %s отдела %r: %s. "
+            "Убедись, что чат существует и получатель/группа начали диалог с ботом.",
+            chat_id,
+            ticket.target_department,
             exc,
         )
 
@@ -905,16 +1005,32 @@ async def _render_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page:
         )
 
 
+def _row_route(context: ContextTypes.DEFAULT_TYPE, row: dict):
+    """Маршрут заявки из строки БД: по target_department; план — из строки или маршрута."""
+    router: TicketRouter = context.bot_data["router"]
+    return router.route(row.get("target_department") or "marketing")
+
+
 async def _resolve_status(context: ContextTypes.DEFAULT_TYPE, row: dict) -> str:
-    """Статус читаем из Planner в момент просмотра — маркетолог мог его поменять."""
+    """Статус читаем из Planner в момент просмотра — исполнитель мог его поменять.
+
+    План берём по отделу-исполнителю заявки (у ДИТ — план ДИТ), сегмент→статус — тоже
+    из маршрута отдела.
+    """
     planner: PlannerClient | None = context.bot_data.get("planner")
     if planner is None or not row.get("planner_task_id"):
+        return STATUS_UNAVAILABLE
+
+    route = _row_route(context, row)
+    plan_id = row.get("planner_plan_id") or (route.plan_id if route else "")
+    if not plan_id:
         return STATUS_UNAVAILABLE
     try:
         task = await planner.get_task(row["planner_task_id"])
         if task is None:  # задачу удалили из плана
             return STATUS_UNAVAILABLE
-        return task_status(task, await planner.bucket_names())
+        bucket_status = route.bucket_status if route else None
+        return task_status(task, await planner.bucket_names(plan_id), bucket_status)
     except GraphError:
         return STATUS_UNAVAILABLE
     except Exception:
@@ -942,8 +1058,9 @@ async def my_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     status = await _resolve_status(context, row)
+    route = _row_route(context, row)
     await query.edit_message_text(
-        request_card_html(row, status),
+        request_card_html(row, status, route.name if route else ""),
         reply_markup=InlineKeyboardMarkup(
             [[InlineKeyboardButton("⬅️ К списку", callback_data="my:list:0")]]
         ),
@@ -1013,6 +1130,7 @@ def build_conversation() -> ConversationHandler:
         ],
         states={
             MENU: [CallbackQueryHandler(menu_create, pattern=r"^menu:create$")],
+            TARGET: [CallbackQueryHandler(target_chosen, pattern=r"^tgt:"), nav],
             DEPARTMENT: [CallbackQueryHandler(department_chosen, pattern=r"^dep:"), nav],
             DEPARTMENT_OTHER: [
                 nav,

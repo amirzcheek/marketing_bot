@@ -6,6 +6,7 @@ sqlite3 из стандартной библиотеки синхронный, �
 """
 
 import asyncio
+import json
 import logging
 import sqlite3
 from datetime import date, datetime, timedelta
@@ -17,21 +18,28 @@ log = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
-    id                TEXT PRIMARY KEY,
-    telegram_user_id  INTEGER NOT NULL,
-    telegram_username TEXT,
-    planner_task_id   TEXT,
-    department        TEXT,
-    task_type         TEXT,
-    summary           TEXT,
-    deadline          TEXT,
-    priority          TEXT,
-    contact           TEXT,
-    created_at        TEXT,
-    created_ts        TEXT,
-    attachments_count INTEGER DEFAULT 0,
-    status            TEXT DEFAULT 'new',
-    status_updated_at TEXT
+    id                   TEXT PRIMARY KEY,
+    telegram_user_id     INTEGER NOT NULL,
+    telegram_username    TEXT,
+    planner_task_id      TEXT,
+    department           TEXT,
+    task_type            TEXT,
+    summary              TEXT,
+    deadline             TEXT,
+    priority             TEXT,
+    contact              TEXT,
+    created_at           TEXT,
+    created_ts           TEXT,
+    attachments_count    INTEGER DEFAULT 0,
+    status               TEXT DEFAULT 'new',
+    status_updated_at    TEXT,
+    target_department    TEXT DEFAULT 'marketing',
+    requester_department TEXT,
+    request_type         TEXT,
+    planner_plan_id      TEXT,
+    assignees            TEXT,
+    route_key            TEXT,
+    custom_fields        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_requests_user ON requests (telegram_user_id, created_ts DESC);
 CREATE INDEX IF NOT EXISTS idx_requests_created ON requests (created_ts DESC);
@@ -39,11 +47,19 @@ CREATE INDEX IF NOT EXISTS idx_requests_created ON requests (created_ts DESC);
 
 # Колонки, добавленные после первого релиза. Для существующих баз мягко доливаем их
 # при старте — у SQLite нет ADD COLUMN IF NOT EXISTS, поэтому сверяемся с PRAGMA.
+# target_department DEFAULT 'marketing' — старые заявки были маркетинговыми (миграция без потерь).
 MIGRATIONS: dict[str, str] = {
     "contact": "ALTER TABLE requests ADD COLUMN contact TEXT",
     "attachments_count": "ALTER TABLE requests ADD COLUMN attachments_count INTEGER DEFAULT 0",
     "status": "ALTER TABLE requests ADD COLUMN status TEXT DEFAULT 'new'",
     "status_updated_at": "ALTER TABLE requests ADD COLUMN status_updated_at TEXT",
+    "target_department": "ALTER TABLE requests ADD COLUMN target_department TEXT DEFAULT 'marketing'",
+    "requester_department": "ALTER TABLE requests ADD COLUMN requester_department TEXT",
+    "request_type": "ALTER TABLE requests ADD COLUMN request_type TEXT",
+    "planner_plan_id": "ALTER TABLE requests ADD COLUMN planner_plan_id TEXT",
+    "assignees": "ALTER TABLE requests ADD COLUMN assignees TEXT",
+    "route_key": "ALTER TABLE requests ADD COLUMN route_key TEXT",
+    "custom_fields": "ALTER TABLE requests ADD COLUMN custom_fields TEXT",
 }
 
 # priority хранится по-русски; API оперирует ключами urgent/normal/low
@@ -87,15 +103,17 @@ class RequestsDB:
                 INSERT OR IGNORE INTO requests (
                     id, telegram_user_id, telegram_username, planner_task_id,
                     department, task_type, summary, deadline, priority, contact,
-                    created_at, created_ts, attachments_count, status, status_updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?)
+                    created_at, created_ts, attachments_count, status, status_updated_at,
+                    target_department, requester_department, request_type, planner_plan_id,
+                    assignees, route_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     ticket.number,
                     ticket.tg_user_id,
                     ticket.tg_username,
                     ticket.planner_task_id,
-                    ticket.department,
+                    ticket.department,  # подразделение заявителя (для показа/совместимости)
                     ticket.task_type,
                     ticket.effective_description,
                     ticket.deadline,
@@ -105,6 +123,12 @@ class RequestsDB:
                     created_ts,
                     len(ticket.attachments),
                     created_ts,
+                    ticket.target_department,
+                    ticket.department,  # requester_department (то же значение, отдельная колонка)
+                    ticket.request_type,
+                    ticket.planner_plan_id,
+                    json.dumps(ticket.assignees, ensure_ascii=False),
+                    ticket.route_key,
                 ),
             )
 
@@ -154,14 +178,18 @@ class RequestsDB:
     def _active_sync(self) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, planner_task_id FROM requests "
+                "SELECT id, planner_task_id, planner_plan_id, target_department FROM requests "
                 "WHERE planner_task_id IS NOT NULL AND planner_task_id != '' "
                 "AND status != 'done'"
             ).fetchall()
         return [dict(r) for r in rows]
 
     async def active_tasks(self) -> list[dict]:
-        """Заявки, чей статус ещё может измениться — их и обходит фоновый рефрешер."""
+        """Заявки, чей статус ещё может измениться — их и обходит фоновый рефрешер.
+
+        Возвращает planner_plan_id/target_department, чтобы рефрешер знал, в каком плане
+        искать задачу.
+        """
         try:
             return await asyncio.to_thread(self._active_sync)
         except sqlite3.Error as exc:
@@ -185,45 +213,68 @@ class RequestsDB:
 
     # --- агрегаты и выборки (для HTTP API) ---------------------------------
 
-    async def stats(self) -> dict:
+    async def stats(self, target_department: str = "") -> dict:
         try:
-            return await asyncio.to_thread(self._stats_sync)
+            return await asyncio.to_thread(self._stats_sync, target_department)
         except sqlite3.Error as exc:
             log.error("Не удалось собрать статистику: %s", exc)
             return {}
 
-    def _stats_sync(self) -> dict:
+    def _stats_sync(self, target_department: str = "") -> dict:
+        # необязательный разрез по отделу-исполнителю
+        flt = "target_department = ?" if target_department else ""
+        fp: list[object] = [target_department] if target_department else []
+
+        def _where(*extra: str) -> str:
+            parts = [p for p in ((flt,) + extra) if p]
+            return f"WHERE {' AND '.join(parts)}" if parts else ""
+
+        today_cond = "date(created_ts) = date('now','localtime')"
+        recent_cond = "date(created_ts) >= date('now','localtime','-29 days')"
+
         with self._connect() as conn:
-            total = conn.execute("SELECT COUNT(*) c FROM requests").fetchone()["c"]
+            total = conn.execute(
+                f"SELECT COUNT(*) c FROM requests {_where()}", fp
+            ).fetchone()["c"]
             today = conn.execute(
-                "SELECT COUNT(*) c FROM requests WHERE date(created_ts) = date('now','localtime')"
+                f"SELECT COUNT(*) c FROM requests {_where(today_cond)}", fp
             ).fetchone()["c"]
 
             status_rows = conn.execute(
-                "SELECT status, COUNT(*) c FROM requests GROUP BY status"
+                f"SELECT status, COUNT(*) c FROM requests {_where()} GROUP BY status", fp
             ).fetchall()
             by_status = {"new": 0, "in_progress": 0, "done": 0}
             for r in status_rows:
                 if r["status"] in by_status:
                     by_status[r["status"]] = r["c"]
 
+            by_target = [
+                {"name": r["target_department"] or "—", "count": r["c"]}
+                for r in conn.execute(
+                    f"SELECT target_department, COUNT(*) c FROM requests {_where()} "
+                    "GROUP BY target_department ORDER BY c DESC",
+                    fp,
+                ).fetchall()
+            ]
             by_department = [
                 {"name": r["department"] or "—", "count": r["c"]}
                 for r in conn.execute(
-                    "SELECT department, COUNT(*) c FROM requests "
-                    "GROUP BY department ORDER BY c DESC"
+                    f"SELECT department, COUNT(*) c FROM requests {_where()} "
+                    "GROUP BY department ORDER BY c DESC",
+                    fp,
                 ).fetchall()
             ]
             by_type = [
                 {"name": r["task_type"] or "—", "count": r["c"]}
                 for r in conn.execute(
-                    "SELECT task_type, COUNT(*) c FROM requests "
-                    "GROUP BY task_type ORDER BY c DESC"
+                    f"SELECT task_type, COUNT(*) c FROM requests {_where()} "
+                    "GROUP BY task_type ORDER BY c DESC",
+                    fp,
                 ).fetchall()
             ]
 
             prio_rows = conn.execute(
-                "SELECT priority, COUNT(*) c FROM requests GROUP BY priority"
+                f"SELECT priority, COUNT(*) c FROM requests {_where()} GROUP BY priority", fp
             ).fetchall()
             by_priority = {"urgent": 0, "normal": 0, "low": 0}
             for r in prio_rows:
@@ -233,9 +284,9 @@ class RequestsDB:
 
             # динамика за 30 дней: заполняем нулями пропущенные дни для ровного графика
             day_rows = conn.execute(
-                "SELECT date(created_ts) d, COUNT(*) c FROM requests "
-                "WHERE date(created_ts) >= date('now','localtime','-29 days') "
-                "GROUP BY d"
+                f"SELECT date(created_ts) d, COUNT(*) c FROM requests "
+                f"{_where(recent_cond)} GROUP BY d",
+                fp,
             ).fetchall()
             counts = {r["d"]: r["c"] for r in day_rows if r["d"]}
             base = datetime.now().date()
@@ -248,7 +299,7 @@ class RequestsDB:
             ]
 
             first = conn.execute(
-                "SELECT date(MIN(created_ts)) d FROM requests"
+                f"SELECT date(MIN(created_ts)) d FROM requests {_where()}", fp
             ).fetchone()["d"]
 
         if total and first:
@@ -261,6 +312,7 @@ class RequestsDB:
             "total": total,
             "today": today,
             "by_status": by_status,
+            "by_target": by_target,
             "by_department": by_department,
             "by_type": by_type,
             "by_priority": by_priority,
@@ -279,6 +331,9 @@ class RequestsDB:
         where: list[str] = []
         params: list[object] = []
 
+        if filters.get("target_department"):
+            where.append("target_department = ?")
+            params.append(filters["target_department"])
         if filters.get("department"):
             where.append("department = ?")
             params.append(filters["department"])
