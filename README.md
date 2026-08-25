@@ -51,7 +51,7 @@ bot/storage.py       jsonl-логи заявок и fallback
 | `PLANNER_ENABLED` | `false` — заявки только в jsonl, без Planner | `true` |
 | `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` / `LLM_TIMEOUT` | Qwen3 на OVMS | обязательно |
 | `LLM_NORMALIZE` | Включить нормализацию описания | `true` |
-| `PLATFORM_NETWORK` | Имя внешней docker-сети платформы | `platform_net` — **проверь имя на сервере** |
+| ~~`PLATFORM_NETWORK`~~ | Больше не используется: сеть задана в `docker-compose.yml` (`deploy_default`) | — |
 | `DATA_DIR` | Каталог jsonl-логов внутри контейнера | `/data` |
 | `REQUESTS_DB_PATH` | SQLite «Мои заявки» + API — обязательно на volume | `/data/requests.db` |
 | `API_PORT` | Порт HTTP API внутри сети (не публикуется наружу) | `8080` |
@@ -103,8 +103,9 @@ LLM и Planner недоступны с твоей машины? Ничего с�
 На сервере, в общей сети платформы:
 
 ```bash
-# 1. Проверь имя внешней сети и впиши его в PLATFORM_NETWORK в .env
-docker network ls
+# 1. Убедись, что внешняя сеть deploy_default существует (её задаёт docker-compose.yml).
+#    Если у платформы сеть называется иначе — поправь имя в docker-compose.yml (networks.platform.name).
+docker network ls | grep deploy_default
 
 # 2. Заполни .env (главное — MARKETING_CHAT_ID)
 
@@ -297,7 +298,7 @@ Graph отдаёт bucket'ы **не** в том порядке, в которо�
 в ответе идёт «Завершено», и первая тестовая заявка улетела именно туда. Поэтому bucket
 выбирается так, по убыванию приоритета:
 
-1. `PLANNER_BUCKET_ID`, если задан (сейчас — «Новые задачи»);
+1. `PLANNER_BUCKET_ID`, если задан (сейчас — «📥 Новые заявки»);
 2. поиск по имени из `PLANNER_BUCKET_NAME`;
 3. первый bucket плана — только как последний резерв, с `WARNING` в логе.
 
