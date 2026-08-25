@@ -52,6 +52,10 @@ class Ticket:
     contact: str = ""
     tg_username: str = ""
     tg_user_id: int = 0
+    # источник заявки: telegram | web (веб-портал KNUS Digital)
+    source: str = "telegram"
+    submitter_name: str = ""
+    submitter_email: str = ""
     created_at: str = ""
     suggested_type: str = ""  # подсказка LLM, не навязываем
     planner_task_id: str = ""
@@ -216,7 +220,10 @@ def planner_description(t: Ticket) -> str:
         f"Приоритет: {t.priority}",
         f"Дедлайн: {t.deadline or NO_DEADLINE}",
         f"Контакт: {t.contact}",
-        f"Telegram: {t.tg_username or '—'} (id {t.tg_user_id})",
+        f"Источник: {'Веб-портал KNUS Digital' if t.source == 'web' else 'Telegram'}",
+        f"Автор: {t.submitter_name or t.tg_username or '—'}",
+        f"Email: {t.submitter_email or '—'}",
+        f"Telegram: {t.tg_username or '—'} (id {t.tg_user_id or '—'})",
         f"Дата подачи: {t.created_at}",
         "",
         "Описание:",
@@ -323,6 +330,9 @@ def notification_html(t: Ticket) -> str:
         f"<b>Суть:</b> {e(t.effective_description)}",
         "",
         f"<b>Контакт:</b> {e(t.contact)}",
+        f"<b>Источник:</b> {'KNUS Digital' if t.source == 'web' else 'Telegram'}",
+        f"<b>Автор:</b> {e(t.submitter_name or t.tg_username or '—')}",
+        f"<b>Email:</b> {e(t.submitter_email or '—')}",
         f"<b>Telegram:</b> {e(t.tg_username or '—')}",
     ]
     if t.attachments:

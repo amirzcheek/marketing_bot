@@ -192,7 +192,17 @@ git pull && docker compose up -d --build
   `q` (поиск по сути, контакту и номеру), `page` (с 1), `per_page` (до 100). Ответ:
   `{total, page, per_page, items:[{id, created_at, target_department, department, request_type,
   task_type, summary, deadline, priority, status, contact, planner_task_id, planner_url,
-  attachments_count}]}`. Сортировка — новые сверху.
+  attachments_count, source, submitter_name, submitter_email}]}`. Сортировка — новые сверху.
+- `POST /api/tickets` → **приём заявки с веб-портала** (KNUS Digital). `multipart/form-data`.
+  Авторизация: `Authorization: Bearer <API_TOKEN>` + заголовки `X-KNUS-User-Email`
+  (обязательно, домен `@knus.edu.kz`, иначе `403`) и `X-KNUS-User-Name` (URL-кодированный).
+  Поля формы: `target_department` (код отдела, по умолчанию `marketing`), `department`
+  (+`department_other`), `task_type` (+`task_type_other`; тип должен входить в типы отдела),
+  `description` (10–5000), `deadline` (`ГГГГ-ММ-ДД`/`ДД.ММ.ГГГГ`/пусто), `priority`
+  (urgent/normal/low), `contact`, файлы (до `MAX_ATTACHMENTS`, ≤20 МБ каждый). Создаёт задачу
+  в плане отдела, грузит файлы в SharePoint, шлёт уведомление в чат отдела, пишет в SQLite
+  (`source='web'`). Ответ `201 {ok, id, planner_url, attachments, warnings}` или `4xx/5xx`
+  с `{error, message}`. Веб-заявки видны в `/api/tickets` и «не мои» в боте (это заявки портала).
 
 ### Как статус попадает в API
 

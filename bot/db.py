@@ -39,7 +39,10 @@ CREATE TABLE IF NOT EXISTS requests (
     planner_plan_id      TEXT,
     assignees            TEXT,
     route_key            TEXT,
-    custom_fields        TEXT
+    custom_fields        TEXT,
+    source               TEXT DEFAULT 'telegram',
+    submitter_name       TEXT,
+    submitter_email      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_requests_user ON requests (telegram_user_id, created_ts DESC);
 CREATE INDEX IF NOT EXISTS idx_requests_created ON requests (created_ts DESC);
@@ -60,6 +63,9 @@ MIGRATIONS: dict[str, str] = {
     "assignees": "ALTER TABLE requests ADD COLUMN assignees TEXT",
     "route_key": "ALTER TABLE requests ADD COLUMN route_key TEXT",
     "custom_fields": "ALTER TABLE requests ADD COLUMN custom_fields TEXT",
+    "source": "ALTER TABLE requests ADD COLUMN source TEXT DEFAULT 'telegram'",
+    "submitter_name": "ALTER TABLE requests ADD COLUMN submitter_name TEXT",
+    "submitter_email": "ALTER TABLE requests ADD COLUMN submitter_email TEXT",
 }
 
 # priority хранится по-русски; API оперирует ключами urgent/normal/low
@@ -105,8 +111,8 @@ class RequestsDB:
                     department, task_type, summary, deadline, priority, contact,
                     created_at, created_ts, attachments_count, status, status_updated_at,
                     target_department, requester_department, request_type, planner_plan_id,
-                    assignees, route_key
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?)
+                    assignees, route_key, source, submitter_name, submitter_email
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     ticket.number,
@@ -129,6 +135,9 @@ class RequestsDB:
                     ticket.planner_plan_id,
                     json.dumps(ticket.assignees, ensure_ascii=False),
                     ticket.route_key,
+                    ticket.source,
+                    ticket.submitter_name,
+                    ticket.submitter_email,
                 ),
             )
 

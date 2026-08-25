@@ -30,12 +30,14 @@ def setup_logging(level: str) -> None:
 async def _post_init(app: Application) -> None:
     await app.bot_data["db"].init()
 
-    # HTTP API поднимаем в этом же loop'е, параллельно polling'у
+    # HTTP API поднимаем в этом же loop'е, параллельно polling'у.
+    # app.bot — чтобы веб-заявки слали уведомления в Telegram.
     api = ApiServer(
         app.bot_data["config"],
         app.bot_data["db"],
         app.bot_data["planner"],
         app.bot_data["registry"],
+        app.bot,
     )
     await api.start()
     app.bot_data["api"] = api
