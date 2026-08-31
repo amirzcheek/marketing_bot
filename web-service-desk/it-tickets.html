@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Заявки ДИТ — KNUS Service Desk</title>
+<style>
+  :root {
+    --bg:#0f1420; --card:#171e2e; --card2:#1e2740; --line:#2a3452;
+    --text:#e8edf7; --muted:#93a0bd; --accent:#4f8cff;
+    --new:#4f8cff; --prog:#f2b544; --done:#2fbf71; --urgent:#ff5c6c; --normal:#f2b544; --low:#2fbf71;
+    --radius:14px;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif; line-height:1.45; }
+  a { color:var(--accent); text-decoration:none; }
+  header.top { display:flex; align-items:center; gap:14px; padding:14px 22px;
+    border-bottom:1px solid var(--line); background:var(--card); flex-wrap:wrap; }
+  header.top .brand { font-weight:700; font-size:17px; }
+  header.top .spacer { flex:1; }
+  .btn { display:inline-flex; align-items:center; gap:8px; border:1px solid var(--line);
+    background:var(--card2); color:var(--text); padding:9px 16px; border-radius:10px; cursor:pointer; font-size:14px; }
+  .btn:hover { border-color:var(--accent); }
+  .wrap { max-width:1200px; margin:22px auto; padding:0 18px 60px; }
+  h1 { font-size:23px; margin:2px 0 18px; }
+  .tiles { display:grid; grid-template-columns:repeat(5,1fr); gap:14px; margin-bottom:20px; }
+  @media (max-width:900px){ .tiles { grid-template-columns:repeat(2,1fr); } }
+  .tile { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px; }
+  .tile .n { font-size:28px; font-weight:800; }
+  .tile .l { color:var(--muted); font-size:13px; margin-top:2px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:20px; }
+  @media (max-width:900px){ .grid { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:18px; }
+  .card h2 { font-size:14px; margin:0 0 14px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  .bar { display:flex; align-items:center; gap:10px; margin:7px 0; font-size:13.5px; }
+  .bar .lbl { width:42%; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bar .track { flex:1; height:10px; background:var(--card2); border-radius:6px; overflow:hidden; }
+  .bar .fill { height:100%; background:var(--accent); border-radius:6px; }
+  .bar .val { width:38px; text-align:right; color:var(--muted); }
+  .spark { display:flex; align-items:flex-end; gap:2px; height:80px; }
+  .spark div { flex:1; background:var(--accent); border-radius:2px 2px 0 0; min-height:2px; opacity:.85; }
+  .filters { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; }
+  .filters select, .filters input { background:var(--card2); border:1px solid var(--line); color:var(--text);
+    border-radius:9px; padding:8px 10px; font-size:13.5px; }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; }
+  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var(--card); }
+  .badge { display:inline-block; padding:2px 9px; border-radius:20px; font-size:12px; white-space:nowrap; }
+  .b-new { background:rgba(79,140,255,.16); color:#8ab4ff; }
+  .b-prog { background:rgba(242,181,68,.16); color:#f2c877; }
+  .b-done { background:rgba(47,191,113,.16); color:#61d69a; }
+  .b-urgent { background:rgba(255,92,108,.16); color:#ff8b95; }
+  .b-normal { background:rgba(242,181,68,.16); color:#f2c877; }
+  .b-low { background:rgba(47,191,113,.16); color:#61d69a; }
+  .src { font-size:11px; color:var(--muted); }
+  .pager { display:flex; justify-content:center; gap:10px; align-items:center; margin-top:16px; }
+  .muted { color:var(--muted); }
+  .tbl-wrap { overflow-x:auto; }
+</style>
+</head>
+<body>
+<header class="top">
+  <span class="brand">🖥 Заявки ДИТ</span>
+  <a class="btn" href="/app">← Назад в галерею</a>
+  <span class="spacer"></span>
+  <a class="btn" href="/logout">Выйти</a>
+</header>
+
+<div class="wrap">
+  <h1>Дашборд заявок ДИТ</h1>
+
+  <div class="tiles" id="tiles">
+    <div class="tile"><div class="n" id="t_total">—</div><div class="l">Всего заявок</div></div>
+    <div class="tile"><div class="n" id="t_today">—</div><div class="l">Сегодня</div></div>
+    <div class="tile"><div class="n" id="t_prog">—</div><div class="l">В работе</div></div>
+    <div class="tile"><div class="n" id="t_done">—</div><div class="l">Готово</div></div>
+    <div class="tile"><div class="n" id="t_urgent">—</div><div class="l">Срочных</div></div>
+  </div>
+
+  <div class="grid">
+    <div class="card"><h2>По типам обращений</h2><div id="c_types"></div></div>
+    <div class="card"><h2>По статусам</h2><div id="c_status"></div></div>
+    <div class="card"><h2>По приоритетам</h2><div id="c_prio"></div></div>
+    <div class="card"><h2>Динамика (30 дней)</h2><div class="spark" id="c_day"></div>
+      <div class="muted" style="font-size:12px;margin-top:8px" id="c_day_avg"></div></div>
+  </div>
+
+  <div class="card">
+    <h2>Заявки</h2>
+    <div class="filters">
+      <input type="text" id="f_q" placeholder="Поиск по сути / контакту / №" />
+      <select id="f_status"><option value="">Статус: любой</option>
+        <option value="new">Новая</option><option value="in_progress">В работе</option><option value="done">Готово</option></select>
+      <select id="f_priority"><option value="">Приоритет: любой</option>
+        <option value="urgent">Срочно</option><option value="normal">Обычный</option><option value="low">Не срочно</option></select>
+      <input type="text" id="f_type" placeholder="Тип (напр. Компьютер)" />
+      <input type="text" id="f_department" placeholder="Подразделение" />
+      <input type="date" id="f_from" title="С даты" />
+      <input type="date" id="f_to" title="По дату" />
+      <button class="btn" id="applyBtn">Применить</button>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>№</th><th>Дата</th><th>Подразделение</th><th>Тип</th><th>Суть</th>
+          <th>Приоритет</th><th>Статус</th><th>Контакт</th><th>Файлы</th><th></th>
+        </tr></thead>
+        <tbody id="rows"><tr><td colspan="10" class="muted">Загрузка…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="pager">
+      <button class="btn" id="prev">← Назад</button>
+      <span class="muted" id="pageInfo">—</span>
+      <button class="btn" id="next">Вперёд →</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let page = 1, perPage = 20, total = 0;
+
+const STATUS = { new:["Новая","b-new"], in_progress:["В работе","b-prog"], done:["Готово","b-done"] };
+const PRIO = { "Срочно":"b-urgent", "Обычный":"b-normal", "Не срочно":"b-low" };
+
+async function apiPost(url, body) {
+  const r = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body||{}) });
+  if (!r.ok) throw new Error(url + " " + r.status);
+  return r.json();
+}
+
+function bars(container, items, colorVar) {
+  const box = $(container); box.innerHTML = "";
+  const max = Math.max(1, ...items.map((i)=>i.count));
+  if (!items.length) { box.innerHTML = '<div class="muted" style="font-size:13px">Нет данных</div>'; return; }
+  items.forEach((i) => {
+    const row = document.createElement("div"); row.className = "bar";
+    row.innerHTML = '<div class="lbl" title="'+esc(i.name)+'">'+esc(i.name)+'</div>' +
+      '<div class="track"><div class="fill" style="width:'+(i.count/max*100)+'%'+(colorVar?';background:'+colorVar:'')+'"></div></div>' +
+      '<div class="val">'+i.count+'</div>';
+    box.appendChild(row);
+  });
+}
+
+async function loadStats() {
+  try {
+    const s = await apiPost("/api/admin/it-tickets/stats", {});
+    $("t_total").textContent = s.total ?? 0;
+    $("t_today").textContent = s.today ?? 0;
+    $("t_prog").textContent = (s.by_status && s.by_status.in_progress) ?? 0;
+    $("t_done").textContent = (s.by_status && s.by_status.done) ?? 0;
+    $("t_urgent").textContent = (s.by_priority && s.by_priority.urgent) ?? 0;
+
+    bars("c_types", (s.by_type||[]).slice(0,10));
+    const st = s.by_status||{};
+    bars("c_status", [
+      {name:"Новые", count:st.new||0}, {name:"В работе", count:st.in_progress||0}, {name:"Готово", count:st.done||0}
+    ]);
+    const pr = s.by_priority||{};
+    bars("c_prio", [
+      {name:"Срочно", count:pr.urgent||0}, {name:"Обычный", count:pr.normal||0}, {name:"Не срочно", count:pr.low||0}
+    ]);
+    const days = s.by_day||[]; const box=$("c_day"); box.innerHTML="";
+    const dmax = Math.max(1, ...days.map((d)=>d.count));
+    days.forEach((d)=>{ const b=document.createElement("div"); b.style.height=(d.count/dmax*100)+"%"; b.title=d.date+": "+d.count; box.appendChild(b); });
+    $("c_day_avg").textContent = "В среднем " + (s.avg_per_day ?? 0) + " заявок/день";
+  } catch (e) { console.error(e); }
+}
+
+function fv(id){ return $(id).value.trim(); }
+
+async function loadList() {
+  $("rows").innerHTML = '<tr><td colspan="10" class="muted">Загрузка…</td></tr>';
+  try {
+    const body = { page, per_page:perPage, q:fv("f_q"), status:fv("f_status"),
+      priority:fv("f_priority"), type:fv("f_type"), department:fv("f_department"),
+      date_from:fv("f_from"), date_to:fv("f_to") };
+    const data = await apiPost("/api/admin/it-tickets/list", body);
+    total = data.total || 0;
+    const rows = $("rows"); rows.innerHTML = "";
+    if (!(data.items||[]).length) { rows.innerHTML = '<tr><td colspan="10" class="muted">Ничего не найдено</td></tr>'; }
+    (data.items||[]).forEach((t) => {
+      const [stLbl, stCls] = STATUS[t.status] || [t.status||"—","b-new"];
+      const prCls = PRIO[t.priority] || "b-normal";
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        "<td>"+esc(t.id)+"</td>" +
+        "<td>"+esc(t.created_at||"")+"</td>" +
+        "<td>"+esc(t.department||"—")+"</td>" +
+        "<td>"+esc(t.task_type||"—")+"</td>" +
+        "<td>"+esc((t.summary||"").slice(0,80))+"</td>" +
+        "<td><span class='badge "+prCls+"'>"+esc(t.priority||"—")+"</span></td>" +
+        "<td><span class='badge "+stCls+"'>"+esc(stLbl)+"</span></td>" +
+        "<td>"+esc(t.contact||"—")+"<div class='src'>"+(t.source==="web"?"веб":"Telegram")+"</div></td>" +
+        "<td>"+(t.attachments_count||0)+"</td>" +
+        "<td>"+(t.planner_url?"<a href='"+esc(t.planner_url)+"' target='_blank'>Planner ↗</a>":"")+"</td>";
+      rows.appendChild(tr);
+    });
+    const pages = Math.max(1, Math.ceil(total/perPage));
+    $("pageInfo").textContent = "Стр. " + page + " из " + pages + " · всего " + total;
+    $("prev").disabled = page<=1; $("next").disabled = page>=pages;
+  } catch (e) {
+    $("rows").innerHTML = '<tr><td colspan="10" class="muted">Ошибка загрузки</td></tr>';
+  }
+}
+
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,(m)=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m])); }
+
+$("applyBtn").onclick = () => { page=1; loadList(); };
+$("prev").onclick = () => { if(page>1){ page--; loadList(); } };
+$("next").onclick = () => { page++; loadList(); };
+$("f_q").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ page=1; loadList(); } });
+
+loadStats();
+loadList();
+</script>
+</body>
+</html>

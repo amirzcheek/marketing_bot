@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Подать заявку — KNUS Service Desk</title>
+<style>
+  :root {
+    --bg: #0f1420; --card: #171e2e; --card2: #1e2740; --line: #2a3452;
+    --text: #e8edf7; --muted: #93a0bd; --accent: #4f8cff; --accent2:#3b6fd6;
+    --ok:#2fbf71; --err:#ff5c6c; --warn:#f2b544; --radius:14px;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family: -apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif; line-height:1.5; }
+  a { color:var(--accent); text-decoration:none; }
+  header.top { display:flex; align-items:center; gap:16px; padding:14px 22px;
+    border-bottom:1px solid var(--line); background:var(--card); flex-wrap:wrap; }
+  header.top .brand { font-weight:700; font-size:17px; }
+  header.top .spacer { flex:1; }
+  header.top .who { color:var(--muted); font-size:14px; }
+  .btn { display:inline-flex; align-items:center; gap:8px; border:1px solid var(--line);
+    background:var(--card2); color:var(--text); padding:9px 16px; border-radius:10px;
+    cursor:pointer; font-size:14px; }
+  .btn:hover { border-color:var(--accent); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  .btn.primary:disabled { opacity:.55; cursor:not-allowed; }
+  .wrap { max-width:760px; margin:26px auto; padding:0 18px 60px; }
+  h1 { font-size:24px; margin:6px 0 4px; }
+  .sub { color:var(--muted); margin:0 0 22px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+    padding:20px; margin-bottom:18px; }
+  .card h2 { font-size:15px; margin:0 0 14px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  label { display:block; font-size:14px; margin:0 0 6px; color:var(--text); }
+  .req::after { content:" *"; color:var(--err); }
+  input[type=text], input[type=date], textarea, select {
+    width:100%; background:var(--card2); border:1px solid var(--line); color:var(--text);
+    border-radius:10px; padding:11px 12px; font-size:15px; font-family:inherit; }
+  textarea { min-height:120px; resize:vertical; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:560px){ .row { grid-template-columns:1fr; } }
+  .field { margin-bottom:16px; }
+  .chips { display:flex; flex-wrap:wrap; gap:10px; }
+  .chip { border:1px solid var(--line); background:var(--card2); border-radius:12px;
+    padding:12px 16px; cursor:pointer; font-size:14px; user-select:none; }
+  .chip:hover { border-color:var(--accent); }
+  .chip.active { border-color:var(--accent); background:rgba(79,140,255,.14); color:#fff; }
+  .hint { color:var(--muted); font-size:12.5px; margin-top:6px; }
+  .counter { float:right; color:var(--muted); font-size:12.5px; }
+  .files-list { margin-top:10px; display:flex; flex-direction:column; gap:6px; }
+  .file-item { display:flex; justify-content:space-between; font-size:13px; color:var(--muted);
+    background:var(--card2); border:1px solid var(--line); border-radius:8px; padding:7px 10px; }
+  .result { border-radius:12px; padding:16px; margin-bottom:18px; display:none; }
+  .result.ok { display:block; background:rgba(47,191,113,.12); border:1px solid var(--ok); }
+  .result.err { display:block; background:rgba(255,92,108,.12); border:1px solid var(--err); }
+  .result .num { font-size:18px; font-weight:700; }
+  .warns { margin-top:8px; color:var(--warn); font-size:13px; }
+  .hidden { display:none !important; }
+  .actions { display:flex; gap:12px; align-items:center; }
+  .spinner { width:16px; height:16px; border:2px solid rgba(255,255,255,.4);
+    border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<header class="top">
+  <span class="brand">🗂 KNUS Service Desk</span>
+  <a class="btn" href="/app">← Назад в галерею</a>
+  <span class="spacer"></span>
+  <span class="who" id="who"></span>
+  <a class="btn" href="/logout">Выйти</a>
+</header>
+
+<div class="wrap">
+  <h1>Подать заявку</h1>
+  <p class="sub">Выберите отдел-исполнитель, опишите задачу и приложите материалы. Мы свяжемся по контакту.</p>
+
+  <div class="result" id="result"></div>
+
+  <form id="form">
+    <!-- Шаг 1: отдел-исполнитель -->
+    <div class="card">
+      <h2>Куда заявка</h2>
+      <div class="chips" id="departments"><span class="hint">Загрузка отделов…</span></div>
+    </div>
+
+    <!-- Остальные поля появляются после выбора отдела -->
+    <div id="rest" class="hidden">
+      <div class="card">
+        <h2>Детали</h2>
+
+        <div class="field">
+          <label class="req">Тип обращения</label>
+          <div class="chips" id="types"></div>
+          <input type="text" id="task_type_other" class="hidden" placeholder="Опишите тип обращения" style="margin-top:10px" />
+        </div>
+
+        <div class="field">
+          <label class="req">Ваше подразделение</label>
+          <select id="department"></select>
+          <input type="text" id="department_other" class="hidden" placeholder="Название подразделения" style="margin-top:10px" />
+        </div>
+
+        <div class="field">
+          <label class="req">Описание задачи
+            <span class="counter"><span id="cnt">0</span>/5000</span>
+          </label>
+          <textarea id="description" maxlength="5000" placeholder="Что нужно сделать, для чего, пожелания по формату (10–5000 символов)"></textarea>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label>Дедлайн</label>
+            <input type="date" id="deadline" />
+            <div class="hint">Необязательно</div>
+          </div>
+          <div class="field">
+            <label class="req">Приоритет</label>
+            <select id="priority">
+              <option value="urgent">🔴 Срочно</option>
+              <option value="normal" selected>🟡 Обычный</option>
+              <option value="low">🟢 Не срочно</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="req">Контакт для уточнений</label>
+          <input type="text" id="contact" placeholder="Имя и телефон или почта" />
+        </div>
+
+        <div class="field">
+          <label>Материалы</label>
+          <input type="file" id="files" multiple />
+          <div class="hint">До <span id="maxfiles">10</span> файлов, каждый ≤ 20 МБ.</div>
+          <div class="files-list" id="filesList"></div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button type="submit" class="btn primary" id="submit">Отправить заявку</button>
+        <span id="loading" class="hidden"><span class="spinner"></span></span>
+      </div>
+    </div>
+  </form>
+</div>
+
+<script>
+const MAX_FILES = 10;
+let selectedDept = null;
+let registry = [];
+
+const $ = (id) => document.getElementById(id);
+
+async function loadRegistry() {
+  try {
+    const r = await fetch("/api/service-desk/registry");
+    if (!r.ok) throw new Error("registry " + r.status);
+    const data = await r.json();
+    registry = data.departments || [];
+    renderDepartments();
+  } catch (e) {
+    $("departments").innerHTML = '<span class="hint" style="color:var(--err)">Не удалось загрузить список отделов. Обновите страницу.</span>';
+  }
+}
+
+function renderDepartments() {
+  const box = $("departments");
+  if (!registry.length) { box.innerHTML = '<span class="hint">Нет доступных отделов.</span>'; return; }
+  box.innerHTML = "";
+  registry.forEach((d) => {
+    const el = document.createElement("div");
+    el.className = "chip";
+    el.textContent = d.name;
+    el.onclick = () => selectDepartment(d, el);
+    box.appendChild(el);
+  });
+}
+
+function selectDepartment(d, el) {
+  selectedDept = d;
+  document.querySelectorAll("#departments .chip").forEach((c) => c.classList.remove("active"));
+  el.classList.add("active");
+  renderTypes(d.request_types || []);
+  $("rest").classList.remove("hidden");
+}
+
+let selectedType = null;
+function renderTypes(types) {
+  const box = $("types"); box.innerHTML = ""; selectedType = null;
+  $("task_type_other").classList.add("hidden");
+  types.forEach((t) => {
+    const el = document.createElement("div");
+    el.className = "chip";
+    el.textContent = t.label;
+    el.onclick = () => {
+      selectedType = t.code;
+      document.querySelectorAll("#types .chip").forEach((c) => c.classList.remove("active"));
+      el.classList.add("active");
+      $("task_type_other").classList.toggle("hidden", t.code !== "other");
+    };
+    box.appendChild(el);
+  });
+}
+
+// Подразделения-заявители — статический список (совпадает с DEPARTMENTS бота).
+const REQUESTER_DEPARTMENTS = [
+  ["intl","Департамент международного сотрудничества и связей с общественностью"],
+  ["security","Служба безопасности"],
+  ["strategy","Департамент стратегии и корпоративного управления"],
+  ["academic","Департамент академической деятельности"],
+  ["career","Центр развития карьеры"],
+  ["dean","Деканат"],
+  ["sport","Центр профессионального развития и спортивного образования"],
+  ["science","Департамент науки и коммерциализации"],
+  ["social","Департамент социально-воспитательной работы"],
+  ["other","Другое (ввести вручную)"],
+];
+function fillRequesterDepartments() {
+  const sel = $("department");
+  REQUESTER_DEPARTMENTS.forEach(([code, name]) => {
+    const o = document.createElement("option"); o.value = code; o.textContent = name; sel.appendChild(o);
+  });
+  sel.onchange = () => $("department_other").classList.toggle("hidden", sel.value !== "other");
+}
+
+$("description").addEventListener("input", (e) => { $("cnt").textContent = e.target.value.length; });
+
+$("files").addEventListener("change", () => {
+  const f = $("files").files; const list = $("filesList"); list.innerHTML = "";
+  if (f.length > MAX_FILES) { alert("Не более " + MAX_FILES + " файлов"); $("files").value = ""; return; }
+  for (const file of f) {
+    const big = file.size > 20 * 1024 * 1024;
+    const row = document.createElement("div"); row.className = "file-item";
+    row.innerHTML = "<span>" + file.name + "</span><span style='color:" + (big ? "var(--err)" : "var(--muted)") + "'>" +
+      (file.size/1024/1024).toFixed(1) + " МБ" + (big ? " — слишком большой" : "") + "</span>";
+    list.appendChild(row);
+  }
+});
+
+function showResult(kind, html) {
+  const r = $("result"); r.className = "result " + kind; r.innerHTML = html;
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!selectedDept) return showResult("err", "Выберите отдел-исполнителя.");
+  if (!selectedType) return showResult("err", "Выберите тип обращения.");
+  const desc = $("description").value.trim();
+  if (desc.length < 10) return showResult("err", "Описание должно содержать не менее 10 символов.");
+  const contact = $("contact").value.trim();
+  if (!contact) return showResult("err", "Укажите контакт для уточнений.");
+
+  const fd = new FormData();
+  fd.append("target_department", selectedDept.code);
+  fd.append("task_type", selectedType);
+  if (selectedType === "other") fd.append("task_type_other", $("task_type_other").value.trim());
+  fd.append("department", $("department").value);
+  if ($("department").value === "other") fd.append("department_other", $("department_other").value.trim());
+  fd.append("description", desc);
+  fd.append("deadline", $("deadline").value); // ГГГГ-ММ-ДД или пусто
+  fd.append("priority", $("priority").value);
+  fd.append("contact", contact);
+  for (const file of $("files").files) fd.append("files", file, file.name);
+
+  $("submit").disabled = true; $("loading").classList.remove("hidden");
+  try {
+    const r = await fetch("/api/service-desk/submit", { method: "POST", body: fd });
+    const data = await r.json().catch(() => ({}));
+    if (r.status === 201 && data.ok) {
+      let html = '<div class="num">✅ Заявка ' + escapeHtml(data.id) + ' принята</div>';
+      if (data.planner_url) html += '<div style="margin-top:6px"><a href="' + escapeHtml(data.planner_url) + '" target="_blank">Открыть в Planner ↗</a></div>';
+      if (data.warnings && data.warnings.length) html += '<div class="warns">⚠ ' + data.warnings.map(escapeHtml).join("<br>⚠ ") + "</div>";
+      showResult("ok", html);
+      $("form").reset(); $("filesList").innerHTML=""; $("cnt").textContent="0";
+      $("rest").classList.add("hidden");
+      document.querySelectorAll("#departments .chip").forEach((c)=>c.classList.remove("active"));
+      selectedDept=null; selectedType=null;
+    } else {
+      showResult("err", "Не удалось отправить: " + escapeHtml((data && data.message) || (data && data.error) || ("HTTP " + r.status)));
+    }
+  } catch (err) {
+    showResult("err", "Сеть недоступна, попробуйте ещё раз.");
+  } finally {
+    $("submit").disabled = false; $("loading").classList.add("hidden");
+  }
+});
+
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, (m)=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m])); }
+
+// имя пользователя в шапке — если сервер отдаёт его в data-атрибуте/эндпоинте, подставь.
+// Здесь оставлено пустым; email/имя в заявку берутся из сессии на стороне прокси.
+fillRequesterDepartments();
+loadRegistry();
+</script>
+</body>
+</html>
