@@ -86,6 +86,21 @@ async def stats(request: web.Request) -> web.Response:
     return _json(await db.stats(target))
 
 
+async def get_registry(request: web.Request) -> web.Response:
+    """Список включённых отделов и их типы обращений — для наполнения веб-формы."""
+    reg: DepartmentRegistry | None = request.app.get("registry")
+    departments = []
+    if reg is not None:
+        for dep in reg.enabled():
+            types = [
+                {"code": key, "label": REQUEST_TYPES[key][0]}
+                for key in dep.request_types
+                if key in REQUEST_TYPES
+            ]
+            departments.append({"code": dep.code, "name": dep.name, "request_types": types})
+    return _json({"departments": departments})
+
+
 def _planner_url(cfg: Config, task_id: str | None) -> str:
     if not task_id:
         return ""
@@ -454,6 +469,7 @@ def build_app(
     app["router"] = TicketRouter(registry) if registry is not None else None
     app["bot"] = bot
     app.router.add_get("/health", health)
+    app.router.add_get("/api/registry", get_registry)  # отделы+типы для веб-формы
     app.router.add_get("/api/stats", stats)
     app.router.add_get("/api/tickets", tickets)
     app.router.add_post("/api/tickets", create_ticket)  # приём заявки с веб-портала
