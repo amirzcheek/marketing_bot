@@ -182,6 +182,21 @@ class RequestsDB:
             log.error("Не удалось прочитать заявку %s: %s", request_id, exc)
             return None
 
+    def _get_by_id_sync(self, request_id: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM requests WHERE id = ?", (request_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    async def get_by_id(self, request_id: str) -> dict | None:
+        """Служебное чтение одной заявки для защищённого HTTP API (без проверки автора)."""
+        try:
+            return await asyncio.to_thread(self._get_by_id_sync, request_id)
+        except sqlite3.Error as exc:
+            log.error("Не удалось прочитать заявку %s: %s", request_id, exc)
+            return None
+
     # --- статусный кеш (для HTTP API) --------------------------------------
 
     def _active_sync(self) -> list[dict]:

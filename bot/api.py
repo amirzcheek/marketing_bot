@@ -12,6 +12,7 @@ import asyncio
 import hmac
 import json
 import logging
+import re
 import shutil
 import tempfile
 from datetime import datetime
@@ -101,6 +102,48 @@ async def get_registry(request: web.Request) -> web.Response:
     return _json({"departments": departments})
 
 
+async def catalog(request: web.Request) -> web.Response:
+    """Полный справочник формы: отделы+типы, подразделения-заявители, приоритеты, лимиты.
+
+    Внешние клиенты не должны хардкодить эти справочники. Богаче, чем /api/registry.
+    """
+    registry: DepartmentRegistry | None = request.app.get("registry")
+    if registry is None:
+        return _json({"error": "registry_unavailable"}, status=503)
+
+    targets = []
+    for department in registry.enabled():
+        request_types = []
+        for key in department.request_types:
+            value = REQUEST_TYPES.get(key)
+            if value:
+                request_types.append({"code": key, "name": value[1] or value[0]})
+        targets.append(
+            {"code": department.code, "name": department.name, "request_types": request_types}
+        )
+
+    requester_departments = [
+        {"code": key, "name": value[1] or value[0]} for key, value in DEPARTMENTS.items()
+    ]
+    priorities = [{"code": key, "name": value[1]} for key, value in PRIORITIES.items()]
+    cfg: Config = request.app["config"]
+    return _json(
+        {
+            "version": "1.0",
+            "departments": targets,
+            "requester_departments": requester_departments,
+            "priorities": priorities,
+            "limits": {
+                "max_attachments": cfg.max_attachments,
+                "max_file_size_bytes": MAX_WEB_FILE_SIZE,
+                "max_request_size_bytes": MAX_WEB_REQUEST_SIZE,
+                "description_min_length": 10,
+                "description_max_length": 5000,
+            },
+        }
+    )
+
+
 def _planner_url(cfg: Config, task_id: str | None) -> str:
     if not task_id:
         return ""
@@ -158,6 +201,47 @@ async def tickets(request: web.Request) -> web.Response:
         for r in result["items"]
     ]
     return _json({**result, "items": items})
+
+
+def _ticket_item(cfg: Config, row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "created_at": row["created_at"],
+        "target_department": row["target_department"] or "marketing",
+        "department": row["department"],
+        "request_type": row["request_type"],
+        "task_type": row["task_type"],
+        "summary": row["summary"],
+        "deadline": row["deadline"],
+        "priority": row["priority"],
+        "status": row["status"] or "new",
+        "status_updated_at": row["status_updated_at"] or "",
+        "contact": row["contact"],
+        "planner_task_id": row["planner_task_id"],
+        "planner_url": _planner_url(cfg, row["planner_task_id"]),
+        "attachments_count": row["attachments_count"] or 0,
+        "source": row["source"] or "telegram",
+        "submitter_name": row["submitter_name"] or "",
+        "submitter_email": row["submitter_email"] or "",
+    }
+
+
+async def ticket_detail(request: web.Request) -> web.Response:
+    """Одна заявка по номеру + кешированный статус. С X-KNUS-Client — только свои заявки."""
+    request_id = request.match_info["ticket_id"].strip().upper()
+    if not re.fullmatch(r"[A-Z0-9-]{8,64}", request_id):
+        return _json({"error": "invalid_ticket_id"}, status=400)
+    db: RequestsDB = request.app["db"]
+    row = await db.get_by_id(request_id)
+    if row is None:
+        return _json({"error": "not_found"}, status=404)
+    client = re.sub(
+        r"[^a-zA-Z0-9_.-]", "", request.headers.get("X-KNUS-Client", "").strip()
+    )[:64]
+    if client and row.get("source") != f"external:{client}":
+        # Не раскрываем существование чужой заявки другому интеграционному клиенту.
+        return _json({"error": "not_found"}, status=404)
+    return _json(_ticket_item(request.app["config"], row))
 
 
 # --- приём заявки с веб-портала (POST /api/tickets) -------------------------
@@ -264,7 +348,12 @@ async def create_ticket(request: web.Request) -> web.Response:
         return _json({"error": "corporate_account_required"}, status=403)
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="knus-web-"))
-    ticket = Ticket(source="web", submitter_name=submitter_name, submitter_email=submitter_email)
+    # источник: web (форма портала) или external:<client>, если задан X-KNUS-Client
+    source_client = re.sub(
+        r"[^a-zA-Z0-9_.-]", "", request.headers.get("X-KNUS-Client", "").strip()
+    )[:64]
+    source = f"external:{source_client}" if source_client else "web"
+    ticket = Ticket(source=source, submitter_name=submitter_name, submitter_email=submitter_email)
     try:
         try:
             fields, files = await _read_submission(request, tmp_dir)
@@ -469,9 +558,11 @@ def build_app(
     app["router"] = TicketRouter(registry) if registry is not None else None
     app["bot"] = bot
     app.router.add_get("/health", health)
-    app.router.add_get("/api/registry", get_registry)  # отделы+типы для веб-формы
+    app.router.add_get("/api/registry", get_registry)  # отделы+типы (минимальный)
+    app.router.add_get("/api/catalog", catalog)  # полный справочник формы
     app.router.add_get("/api/stats", stats)
     app.router.add_get("/api/tickets", tickets)
+    app.router.add_get("/api/tickets/{ticket_id}", ticket_detail)  # одна заявка по номеру
     app.router.add_post("/api/tickets", create_ticket)  # приём заявки с веб-портала
     return app
 
