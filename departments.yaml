@@ -43,9 +43,13 @@ departments:
     planner_bucket_name: "📥 Заявки Service Desk"
     notification_chat_id: ""         # пусто → берётся IT_CHAT_ID из .env (или впиши chat_id здесь)
     assignees: []                    # ← при желании впиши email-ы саппорта ДИТ; пусто = общая очередь
-    request_types: [account, email, hardware, network, software, website, consultation, other]
+    request_types: [account, email, hardware, network, software, edms, website, consultation, other]
+    # заявки типа edms падают в отдельную колонку (в обход общей «Заявки Service Desk»)
+    type_buckets:
+      edms: "7BiOeR5G10eXApJpggdlMpgABOGn"   # сегмент «📄 EDMS» в плане ДИТ
     bucket_status:
       "📥 Заявки Service Desk": "🆕 Принята, ждёт очереди"
+      "📄 EDMS": "🆕 Принята, ждёт очереди"
       "Новые": "🆕 Принята, ждёт очереди"
       "В работе": "🔧 В работе"
       "На проверке": "👀 На проверке"

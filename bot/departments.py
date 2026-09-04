@@ -33,6 +33,8 @@ class Department:
     assignees: tuple[str, ...]
     request_types: tuple[str, ...]
     bucket_status: dict[str, str] = field(default_factory=dict)
+    # тип обращения → id сегмента: заявки этого типа падают в отдельную колонку
+    type_buckets: dict[str, str] = field(default_factory=dict)
 
 
 class DepartmentRegistry:
@@ -107,6 +109,9 @@ def _parse_department(code: str, raw: dict, cfg: Config) -> Department:
     bucket_status = {
         str(k): str(v) for k, v in (raw.get("bucket_status") or {}).items() if k and v
     }
+    type_buckets = {
+        str(k): str(v) for k, v in (raw.get("type_buckets") or {}).items() if k and v
+    }
 
     return Department(
         code=code,
@@ -119,6 +124,7 @@ def _parse_department(code: str, raw: dict, cfg: Config) -> Department:
         assignees=assignees,
         request_types=request_types,
         bucket_status=bucket_status,
+        type_buckets=type_buckets,
     )
 
 

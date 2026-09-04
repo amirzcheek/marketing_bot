@@ -764,11 +764,13 @@ async def _submit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         error = f"нет плана для отдела {ticket.target_department!r}"
         log.error("Заявка %s: %s", ticket.number, error)
     else:
+        # сегмент: отдельный по типу обращения (напр. EDMS), иначе общий отдела
+        bkt_id, bkt_name = route.bucket_for(ticket.request_type) if route else ("", "")
         try:
             created = await planner.create_task(
                 plan_id=ticket.planner_plan_id,
-                bucket_id=route.bucket_id if route else "",
-                bucket_name=route.bucket_name if route else "",
+                bucket_id=bkt_id,
+                bucket_name=bkt_name,
                 title=planner_title(ticket),
                 due_date_iso=ticket.deadline_iso(),
                 priority=ticket.priority_value,

@@ -19,6 +19,14 @@ class Route:
     notification_chat_ids: tuple[str, ...]  # уведомления идут во все эти чаты
     assignees: tuple[str, ...]
     bucket_status: dict[str, str]
+    type_buckets: dict[str, str]  # тип обращения → id отдельного сегмента
+
+    def bucket_for(self, request_type: str) -> tuple[str, str]:
+        """Сегмент для заявки: отдельный по типу (по id), иначе общий отдела."""
+        override = self.type_buckets.get(request_type or "")
+        if override:
+            return override, ""  # знаем id — имя не нужно
+        return self.bucket_id, self.bucket_name
 
 
 class TicketRouter:
@@ -36,6 +44,7 @@ class TicketRouter:
             assignees=dep.assignees,
             # у отдела свой маппинг сегмент→статус; если нет — общий дефолт
             bucket_status=dep.bucket_status or BUCKET_STATUS,
+            type_buckets=dep.type_buckets,
         )
 
     def route(self, code: str) -> Route | None:

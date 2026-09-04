@@ -413,11 +413,13 @@ async def create_ticket(request: web.Request) -> web.Response:
         ticket.created_at = now.strftime("%d.%m.%Y %H:%M")
         notify_chats = route.notification_chat_ids
 
+        # сегмент: отдельный по типу обращения (напр. EDMS), иначе общий отдела
+        bkt_id, bkt_name = route.bucket_for(ticket.request_type)
         try:
             created = await planner.create_task(
                 plan_id=ticket.planner_plan_id,
-                bucket_id=route.bucket_id,
-                bucket_name=route.bucket_name,
+                bucket_id=bkt_id,
+                bucket_name=bkt_name,
                 title=planner_title(ticket),
                 due_date_iso=ticket.deadline_iso(),
                 priority=ticket.priority_value,
