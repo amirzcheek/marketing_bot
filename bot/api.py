@@ -39,7 +39,6 @@ from .ticket import (
     notification_html,
     planner_description,
     planner_title,
-    valid_phone,
 )
 
 log = logging.getLogger(__name__)
@@ -403,10 +402,9 @@ async def create_ticket(request: web.Request) -> web.Response:
             ticket.contact = fields.get("contact", "").strip() or submitter_email
             if len(ticket.contact) > 500:
                 raise ValueError("Поле контакта слишком длинное")
-            ticket.phone = fields.get("phone", "").strip()
-            if not valid_phone(ticket.phone):
-                raise ValueError("Укажите корректный номер телефона (не меньше 10 цифр)")
-            ticket.phone = ticket.phone[:50]
+            # Телефон на вебе обязателен на уровне формы (required). Жёсткую серверную
+            # проверку не включаем, чтобы не ломать формы без этого поля; если пришёл — сохраняем.
+            ticket.phone = fields.get("phone", "").strip()[:50]
             for index, local_path in enumerate(files):
                 original_name = fields.get(f"_original_{index}", local_path.name)
                 ticket.attachments.append(

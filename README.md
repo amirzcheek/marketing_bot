@@ -212,7 +212,7 @@ Telegram принимает для лички только **числовой** 
   `target_department` (код отдела, по умолчанию `marketing`), `department` (+`department_other`),
   `task_type` (+`task_type_other`; должен входить в типы отдела), `description` (10–5000),
   `deadline` (`ГГГГ-ММ-ДД`/`ДД.ММ.ГГГГ`/пусто), `priority` (urgent/normal/low), `contact`,
-  `phone` (обязательно, ≥10 цифр — иначе `400`), файлы
+  `phone` (сохраняется; обязательность — на уровне веб-формы `required`), файлы
   (до `MAX_ATTACHMENTS`, ≤20 МБ каждый). Создаёт задачу в плане отдела, грузит файлы в SharePoint,
   шлёт уведомление в чат отдела, пишет в SQLite (`source='web'`). Ответ
   `201 {ok, id, planner_url, attachments, warnings}` или `4xx/5xx` с `{error, message}`.
