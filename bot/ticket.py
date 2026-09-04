@@ -1,6 +1,7 @@
 """Модель заявки, генерация номера и форматирование текстов."""
 
 import random
+import re
 import string
 from dataclasses import dataclass, field, asdict
 from datetime import date, datetime, timezone
@@ -9,6 +10,12 @@ from html import escape
 from .constants import BUCKET_STATUS, CATEGORY_DEPARTMENTS, NO_DEADLINE, URGENT_CATEGORY
 
 MAX_TITLE_GIST = 60
+PHONE_MIN_DIGITS = 10  # +7 7XX XXX XX XX = 11 цифр; допускаем от 10
+
+
+def valid_phone(text: str) -> bool:
+    """Телефон считаем валидным, если в нём достаточно цифр (форматирование любое)."""
+    return len(re.sub(r"\D", "", text or "")) >= PHONE_MIN_DIGITS
 
 
 @dataclass
@@ -50,6 +57,7 @@ class Ticket:
     priority: str = ""
     priority_value: int = 5
     contact: str = ""
+    phone: str = ""  # обязательный номер телефона
     tg_username: str = ""
     tg_user_id: int = 0
     # источник заявки: telegram | web (веб-портал KNUS Digital)
@@ -189,6 +197,7 @@ def request_card_html(row: dict, status: str, target_name: str = "") -> str:
         f"<b>Суть:</b> {e(row['summary'] or '—')}",
         f"<b>Дедлайн:</b> {e(row['deadline'] or NO_DEADLINE)}",
         f"<b>Приоритет:</b> {e(row['priority'] or '—')}",
+        f"<b>Телефон:</b> {e(row['phone'] or '—')}",
         f"<b>Подана:</b> {e(row['created_at'] or '—')}",
     ]
     return "\n".join(lines)
@@ -220,6 +229,7 @@ def planner_description(t: Ticket) -> str:
         f"Приоритет: {t.priority}",
         f"Дедлайн: {t.deadline or NO_DEADLINE}",
         f"Контакт: {t.contact}",
+        f"Телефон: {t.phone or '—'}",
         f"Источник: {'Веб-портал KNUS Digital' if t.source == 'web' else 'Telegram'}",
         f"Автор: {t.submitter_name or t.tg_username or '—'}",
         f"Email: {t.submitter_email or '—'}",
@@ -296,6 +306,7 @@ def summary_html(t: Ticket) -> str:
         f"<b>Дедлайн:</b> {e(t.deadline or NO_DEADLINE)}",
         f"<b>Приоритет:</b> {e(t.priority)}",
         f"<b>Контакт:</b> {e(t.contact)}",
+        f"<b>Телефон:</b> {e(t.phone or '—')}",
     ]
     return "\n".join(lines)
 
@@ -330,6 +341,7 @@ def notification_html(t: Ticket) -> str:
         f"<b>Суть:</b> {e(t.effective_description)}",
         "",
         f"<b>Контакт:</b> {e(t.contact)}",
+        f"<b>Телефон:</b> {e(t.phone or '—')}",
         f"<b>Источник:</b> {'KNUS Digital' if t.source == 'web' else 'Telegram'}",
         f"<b>Автор:</b> {e(t.submitter_name or t.tg_username or '—')}",
         f"<b>Email:</b> {e(t.submitter_email or '—')}",

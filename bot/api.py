@@ -39,6 +39,7 @@ from .ticket import (
     notification_html,
     planner_description,
     planner_title,
+    valid_phone,
 )
 
 log = logging.getLogger(__name__)
@@ -191,6 +192,7 @@ async def tickets(request: web.Request) -> web.Response:
             "priority": r["priority"],
             "status": r["status"] or "new",
             "contact": r["contact"],
+            "phone": r["phone"] or "",
             "planner_task_id": r["planner_task_id"],
             "planner_url": _planner_url(cfg, r["planner_task_id"]),
             "attachments_count": r["attachments_count"] or 0,
@@ -217,6 +219,7 @@ def _ticket_item(cfg: Config, row: dict) -> dict:
         "status": row["status"] or "new",
         "status_updated_at": row["status_updated_at"] or "",
         "contact": row["contact"],
+        "phone": row["phone"] or "",
         "planner_task_id": row["planner_task_id"],
         "planner_url": _planner_url(cfg, row["planner_task_id"]),
         "attachments_count": row["attachments_count"] or 0,
@@ -400,6 +403,10 @@ async def create_ticket(request: web.Request) -> web.Response:
             ticket.contact = fields.get("contact", "").strip() or submitter_email
             if len(ticket.contact) > 500:
                 raise ValueError("Поле контакта слишком длинное")
+            ticket.phone = fields.get("phone", "").strip()
+            if not valid_phone(ticket.phone):
+                raise ValueError("Укажите корректный номер телефона (не меньше 10 цифр)")
+            ticket.phone = ticket.phone[:50]
             for index, local_path in enumerate(files):
                 original_name = fields.get(f"_original_{index}", local_path.name)
                 ticket.attachments.append(

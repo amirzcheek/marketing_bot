@@ -45,6 +45,7 @@ from .ticket import (
     request_card_html,
     summary_html,
     task_status,
+    valid_phone,
 )
 
 log = logging.getLogger(__name__)
@@ -62,9 +63,10 @@ log = logging.getLogger(__name__)
     DEADLINE,
     PRIORITY,
     CONTACT,
+    PHONE,
     CONFIRM,
     EDIT_MENU,
-) = range(14)
+) = range(15)
 
 MIN_DESCRIPTION_LEN = 10
 
@@ -181,6 +183,7 @@ def _edit_kb() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("Дедлайн", callback_data="edit:deadline")],
             [InlineKeyboardButton("Приоритет", callback_data="edit:priority")],
             [InlineKeyboardButton("Контакт", callback_data="edit:contact")],
+            [InlineKeyboardButton("Телефон", callback_data="edit:phone")],
             [InlineKeyboardButton("⬅️ Назад к сводке", callback_data="edit:back")],
         ]
     )
@@ -287,11 +290,21 @@ async def show_priority(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 async def show_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await _send(
         update,
-        "<b>Шаг: контакт.</b> Имя и телефон или почта для уточнений.\n"
-        "Например: <code>Айгуль Смагулова, +7 701 123 45 67</code>",
+        "<b>Шаг: контакт.</b> Имя (и почта по желанию) для уточнений.\n"
+        "Например: <code>Айгуль Смагулова, a.smagulova@knus.edu.kz</code>",
         _back_only_kb(context, "priority"),
     )
     return CONTACT
+
+
+async def show_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await _send(
+        update,
+        "<b>Шаг: телефон.</b> Укажите номер телефона для связи (обязательно).\n"
+        "Например: <code>+7 701 123 45 67</code>",
+        _back_only_kb(context, "contact"),
+    )
+    return PHONE
 
 
 async def show_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -366,6 +379,7 @@ _NAV = {
     "attach": show_attach_ask,
     "deadline": show_deadline,
     "priority": show_priority,
+    "contact": show_contact,
     "summary": show_summary,
 }
 
@@ -671,6 +685,22 @@ async def contact_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     ticket = _ticket(context)
     ticket.contact = text[:300]
+
+    if _editing(context):
+        return await show_summary(update, context)
+    return await show_phone(update, context)
+
+
+async def phone_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = (update.effective_message.text or "").strip()
+    if not valid_phone(text):
+        await update.effective_message.reply_text(
+            "Нужен корректный номер телефона (не меньше 10 цифр). Введите ещё раз:\n"
+            "Например: +7 701 123 45 67"
+        )
+        return PHONE
+
+    _ticket(context).phone = text[:50]
     return await show_summary(update, context)
 
 
@@ -725,6 +755,8 @@ async def edit_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         return await show_priority(update, context)
     if field == "contact":
         return await show_contact(update, context)
+    if field == "phone":
+        return await show_phone(update, context)
 
     return CONFIRM
 
@@ -1172,6 +1204,7 @@ def build_conversation() -> ConversationHandler:
             ],
             PRIORITY: [CallbackQueryHandler(priority_chosen, pattern=r"^prio:"), nav],
             CONTACT: [nav, MessageHandler(filters.TEXT & ~filters.COMMAND, contact_entered)],
+            PHONE: [nav, MessageHandler(filters.TEXT & ~filters.COMMAND, phone_entered)],
             CONFIRM: [CallbackQueryHandler(final_action, pattern=r"^final:")],
             EDIT_MENU: [CallbackQueryHandler(edit_choice, pattern=r"^edit:")],
         },

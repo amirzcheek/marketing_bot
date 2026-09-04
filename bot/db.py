@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS requests (
     deadline             TEXT,
     priority             TEXT,
     contact              TEXT,
+    phone                TEXT,
     created_at           TEXT,
     created_ts           TEXT,
     attachments_count    INTEGER DEFAULT 0,
@@ -66,6 +67,7 @@ MIGRATIONS: dict[str, str] = {
     "source": "ALTER TABLE requests ADD COLUMN source TEXT DEFAULT 'telegram'",
     "submitter_name": "ALTER TABLE requests ADD COLUMN submitter_name TEXT",
     "submitter_email": "ALTER TABLE requests ADD COLUMN submitter_email TEXT",
+    "phone": "ALTER TABLE requests ADD COLUMN phone TEXT",
 }
 
 # priority хранится по-русски; API оперирует ключами urgent/normal/low
@@ -108,11 +110,11 @@ class RequestsDB:
                 """
                 INSERT OR IGNORE INTO requests (
                     id, telegram_user_id, telegram_username, planner_task_id,
-                    department, task_type, summary, deadline, priority, contact,
+                    department, task_type, summary, deadline, priority, contact, phone,
                     created_at, created_ts, attachments_count, status, status_updated_at,
                     target_department, requester_department, request_type, planner_plan_id,
                     assignees, route_key, source, submitter_name, submitter_email
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     ticket.number,
@@ -125,6 +127,7 @@ class RequestsDB:
                     ticket.deadline,
                     ticket.priority,
                     ticket.contact,
+                    ticket.phone,
                     ticket.created_at,
                     created_ts,
                     len(ticket.attachments),

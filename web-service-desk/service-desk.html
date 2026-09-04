@@ -126,7 +126,13 @@
 
         <div class="field">
           <label class="req">Контакт для уточнений</label>
-          <input type="text" id="contact" placeholder="Имя и телефон или почта" />
+          <input type="text" id="contact" placeholder="Имя (и почта по желанию)" />
+        </div>
+
+        <div class="field">
+          <label class="req">Номер телефона</label>
+          <input type="tel" id="phone" placeholder="+7 701 123 45 67" />
+          <div class="hint">Обязательно — по нему свяжутся по заявке.</div>
         </div>
 
         <div class="field">
@@ -252,6 +258,8 @@ $("form").addEventListener("submit", async (e) => {
   if (desc.length < 10) return showResult("err", "Описание должно содержать не менее 10 символов.");
   const contact = $("contact").value.trim();
   if (!contact) return showResult("err", "Укажите контакт для уточнений.");
+  const phone = $("phone").value.trim();
+  if ((phone.replace(/\D/g, "").length) < 10) return showResult("err", "Укажите корректный номер телефона (не меньше 10 цифр).");
 
   const fd = new FormData();
   fd.append("target_department", selectedDept.code);
@@ -263,6 +271,7 @@ $("form").addEventListener("submit", async (e) => {
   fd.append("deadline", $("deadline").value); // ГГГГ-ММ-ДД или пусто
   fd.append("priority", $("priority").value);
   fd.append("contact", contact);
+  fd.append("phone", phone);
   for (const file of $("files").files) fd.append("files", file, file.name);
 
   $("submit").disabled = true; $("loading").classList.remove("hidden");
