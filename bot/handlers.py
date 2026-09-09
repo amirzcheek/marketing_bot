@@ -1076,7 +1076,7 @@ async def action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 # --- очередь заявок исполнителя (/queue) ------------------------------------
 
-QUEUE_PAGE = 8
+QUEUE_MAX = 25  # максимум отдельных сообщений на один /queue
 
 
 def _staff_departments(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> list[str]:
@@ -1107,76 +1107,57 @@ def _queue_item_text(r: dict) -> str:
     return "\n".join(lines)
 
 
-def _queue_kb(rows: list[dict], page: int) -> InlineKeyboardMarkup:
-    start = page * QUEUE_PAGE
-    chunk = rows[start : start + QUEUE_PAGE]
-    keyboard = [
-        [InlineKeyboardButton(f"✅ Выполнено · №{r['id']}", callback_data=f"qdone:{r['id']}")]
-        for r in chunk
-    ]
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton("⬅️", callback_data=f"qpage:{page - 1}"))
-    nav.append(InlineKeyboardButton("🔄 Обновить", callback_data=f"qpage:{page}"))
-    if start + QUEUE_PAGE < len(rows):
-        nav.append(InlineKeyboardButton("➡️", callback_data=f"qpage:{page + 1}"))
-    keyboard.append(nav)
-    return InlineKeyboardMarkup(keyboard)
+def _queue_item_kb(number: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("✅ Выполнено", callback_data=f"qdone:{number}")]]
+    )
 
 
-async def _render_queue(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int) -> None:
-    query = update.callback_query
+async def queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает открытые заявки отдела: каждая — отдельным сообщением со своей кнопкой."""
+    msg = update.effective_message
     depts = _staff_departments(context, update.effective_user.id)
-
-    async def _out(text, kb=None):
-        if query:
-            await query.edit_message_text(
-                text, reply_markup=kb, parse_mode=ParseMode.HTML, disable_web_page_preview=True
-            )
-        else:
-            await update.effective_message.reply_text(
-                text, reply_markup=kb, parse_mode=ParseMode.HTML, disable_web_page_preview=True
-            )
-
     if not depts:
-        await _out("Вы не назначены исполнителем ни в одном отделе.")
+        await msg.reply_text("Вы не назначены исполнителем ни в одном отделе.")
         return
 
     db: RequestsDB = context.bot_data["db"]
     rows = await db.open_tickets_for(depts)
     if not rows:
-        await _out("✅ Открытых заявок нет.")
+        await msg.reply_text("✅ Открытых заявок нет.")
         return
 
-    pages = (len(rows) + QUEUE_PAGE - 1) // QUEUE_PAGE
-    page = max(0, min(page, pages - 1))
-    start = page * QUEUE_PAGE
-    chunk = rows[start : start + QUEUE_PAGE]
+    head = f"🗂 <b>Открытые заявки: {len(rows)}</b>"
+    if len(rows) > QUEUE_MAX:
+        head += f"\nПоказаны первые {QUEUE_MAX} — закройте часть и вызовите /queue снова."
+    await msg.reply_text(head, parse_mode=ParseMode.HTML)
 
-    header = f"🗂 <b>Открытые заявки: {len(rows)}</b>"
-    if pages > 1:
-        header += f"  ·  стр. {page + 1}/{pages}"
-    body = "\n\n".join(_queue_item_text(r) for r in chunk)
-    footer = "\n\nНажмите «✅ Выполнено» у нужной заявки (по номеру)."
-    await _out(f"{header}\n\n{body}{footer}", _queue_kb(rows, page))
-
-
-async def queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _render_queue(update, context, 0)
+    # каждая заявка — своим сообщением: текст + кнопка сразу под ней
+    for r in rows[:QUEUE_MAX]:
+        await msg.reply_text(
+            _queue_item_text(r),
+            reply_markup=_queue_item_kb(r["id"]),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
 
 
 async def queue_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопка «✅ Выполнено» у заявки в /queue: закрывает её и правит это же сообщение."""
     query = update.callback_query
-    action, value = query.data.split(":", 1)
-    if action == "qpage":
-        await query.answer()
-        await _render_queue(update, context, int(value))
+    number = query.data.split(":", 1)[1]
+    ok, toast = await _do_action(context, number, None, query.from_user)
+    if not ok:
+        await query.answer(toast, show_alert=True)
         return
-    # qdone: завершить заявку (done-действие её отдела)
-    ok, toast = await _do_action(context, value, None, query.from_user)
-    await query.answer(("Готово: " + toast) if ok else toast, show_alert=not ok)
-    if ok:
-        await _render_queue(update, context, 0)  # выполненная уходит из очереди
+    try:
+        base = query.message.text_html if query.message and query.message.text else ""
+        await query.edit_message_text(
+            f"{base}\n\n<b>{escape(toast)}</b>", parse_mode=ParseMode.HTML
+        )
+    except TelegramError:
+        pass
+    await query.answer("Готово")
 
 
 # --- мои заявки -------------------------------------------------------------
@@ -1434,7 +1415,7 @@ def register(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(action_callback, pattern=r"^act:"))
     # очередь заявок исполнителя
     app.add_handler(CommandHandler("queue", queue_command))
-    app.add_handler(CallbackQueryHandler(queue_callback, pattern=r"^q(done|page):"))
+    app.add_handler(CallbackQueryHandler(queue_callback, pattern=r"^qdone:"))
     app.add_handler(CommandHandler("myid", myid))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("cancel", cancel))
