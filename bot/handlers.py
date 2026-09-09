@@ -1086,16 +1086,32 @@ def _staff_departments(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> list
     return [d.code for d in registry.enabled() if uid in d.staff]
 
 
+_PRIORITY_DOT = {"Срочно": "🔴", "Обычный": "🟡", "Не срочно": "🟢"}
+
+
+def _queue_item_text(r: dict) -> str:
+    """Читаемая карточка заявки для очереди (удобно смотреть с телефона)."""
+    e = escape
+    dot = _PRIORITY_DOT.get(r.get("priority") or "", "•")
+    lines = [
+        f"{dot} <b>№{e(r['id'])}</b> · {e(r.get('priority') or '—')}",
+        f"🏷 {e(r.get('task_type') or '—')} — {e(r.get('department') or '—')}",
+        f"📝 {e(_short(r.get('summary') or '', 160))}",
+    ]
+    tail = f"📞 {e(r.get('phone') or '—')}"
+    if r.get("deadline"):
+        tail += f"   ⏳ {e(r['deadline'])}"
+    if r.get("created_at"):
+        tail += f"   🕒 {e(r['created_at'])}"
+    lines.append(tail)
+    return "\n".join(lines)
+
+
 def _queue_kb(rows: list[dict], page: int) -> InlineKeyboardMarkup:
     start = page * QUEUE_PAGE
     chunk = rows[start : start + QUEUE_PAGE]
     keyboard = [
-        [
-            InlineKeyboardButton(
-                f"✅ №{r['id']} · {_short(r['task_type'] or '', 18)} · {_short(r['summary'] or '', 22)}",
-                callback_data=f"qdone:{r['id']}",
-            )
-        ]
+        [InlineKeyboardButton(f"✅ Выполнено · №{r['id']}", callback_data=f"qdone:{r['id']}")]
         for r in chunk
     ]
     nav = []
@@ -1114,9 +1130,13 @@ async def _render_queue(update: Update, context: ContextTypes.DEFAULT_TYPE, page
 
     async def _out(text, kb=None):
         if query:
-            await query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+            await query.edit_message_text(
+                text, reply_markup=kb, parse_mode=ParseMode.HTML, disable_web_page_preview=True
+            )
         else:
-            await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+            await update.effective_message.reply_text(
+                text, reply_markup=kb, parse_mode=ParseMode.HTML, disable_web_page_preview=True
+            )
 
     if not depts:
         await _out("Вы не назначены исполнителем ни в одном отделе.")
@@ -1130,11 +1150,15 @@ async def _render_queue(update: Update, context: ContextTypes.DEFAULT_TYPE, page
 
     pages = (len(rows) + QUEUE_PAGE - 1) // QUEUE_PAGE
     page = max(0, min(page, pages - 1))
+    start = page * QUEUE_PAGE
+    chunk = rows[start : start + QUEUE_PAGE]
+
     header = f"🗂 <b>Открытые заявки: {len(rows)}</b>"
     if pages > 1:
-        header += f"\nСтраница {page + 1} из {pages}"
-    header += "\n\nНажмите «✅», когда заявка выполнена."
-    await _out(header, _queue_kb(rows, page))
+        header += f"  ·  стр. {page + 1}/{pages}"
+    body = "\n\n".join(_queue_item_text(r) for r in chunk)
+    footer = "\n\nНажмите «✅ Выполнено» у нужной заявки (по номеру)."
+    await _out(f"{header}\n\n{body}{footer}", _queue_kb(rows, page))
 
 
 async def queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
