@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS requests (
     attachments_count    INTEGER DEFAULT 0,
     status               TEXT DEFAULT 'new',
     status_updated_at    TEXT,
+    last_action_by       TEXT,
+    last_action_at       TEXT,
     target_department    TEXT DEFAULT 'marketing',
     requester_department TEXT,
     request_type         TEXT,
@@ -68,6 +70,8 @@ MIGRATIONS: dict[str, str] = {
     "submitter_name": "ALTER TABLE requests ADD COLUMN submitter_name TEXT",
     "submitter_email": "ALTER TABLE requests ADD COLUMN submitter_email TEXT",
     "phone": "ALTER TABLE requests ADD COLUMN phone TEXT",
+    "last_action_by": "ALTER TABLE requests ADD COLUMN last_action_by TEXT",
+    "last_action_at": "ALTER TABLE requests ADD COLUMN last_action_at TEXT",
 }
 
 # priority хранится по-русски; API оперирует ключами urgent/normal/low
@@ -237,6 +241,21 @@ class RequestsDB:
             await asyncio.to_thread(self._update_statuses_sync, updates)
         except sqlite3.Error as exc:
             log.error("Не удалось обновить статусы (%d шт.): %s", len(updates), exc)
+
+    def _record_action_sync(self, number: str, status: str, actor: str, ts: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE requests SET status = ?, status_updated_at = ?, "
+                "last_action_by = ?, last_action_at = ? WHERE id = ?",
+                (status, ts, actor, ts, number),
+            )
+
+    async def record_action(self, number: str, status: str, actor: str, ts: str) -> None:
+        """Исполнитель сменил статус из Telegram — фиксируем статус и автора."""
+        try:
+            await asyncio.to_thread(self._record_action_sync, number, status, actor, ts)
+        except sqlite3.Error as exc:
+            log.error("Не удалось записать действие по заявке %s: %s", number, exc)
 
     # --- агрегаты и выборки (для HTTP API) ---------------------------------
 

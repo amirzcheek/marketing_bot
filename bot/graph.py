@@ -281,6 +281,38 @@ class PlannerClient:
             "url": f"https://tasks.office.com/{self.cfg.graph_tenant_id}/Home/Task/{task_id}",
         }
 
+    async def move_task(self, task_id: str, bucket_id: str, done: bool = False) -> None:
+        """Переносит задачу в сегмент (смена статуса). done → ещё и percentComplete=100."""
+        client = await self._http()
+        url = f"{GRAPH_BASE}/planner/tasks/{task_id}"
+        resp = await client.get(url, headers=await self._headers())
+        if resp.status_code != 200:
+            raise self._explain(resp, "чтение задачи (перенос)")
+        headers = await self._headers()
+        headers["If-Match"] = resp.json().get("@odata.etag")
+        body: dict[str, object] = {"bucketId": bucket_id}
+        if done:
+            body["percentComplete"] = 100
+        resp = await client.patch(url, headers=headers, json=body)
+        if resp.status_code not in (200, 204):
+            raise self._explain(resp, "перенос задачи в сегмент")
+
+    async def append_status_note(self, task_id: str, line: str) -> None:
+        """Дописывает строку в описание задачи (журнал: кто и когда сменил статус)."""
+        client = await self._http()
+        url = f"{GRAPH_BASE}/planner/tasks/{task_id}/details"
+        resp = await client.get(url, headers=await self._headers())
+        if resp.status_code != 200:
+            raise self._explain(resp, "чтение details (журнал)")
+        data = resp.json()
+        desc = (data.get("description") or "").rstrip()
+        new_desc = f"{desc}\n{line}" if desc else line
+        headers = await self._headers()
+        headers["If-Match"] = data.get("@odata.etag")
+        resp = await client.patch(url, headers=headers, json={"description": new_desc[:32000]})
+        if resp.status_code not in (200, 204):
+            raise self._explain(resp, "запись журнала статуса")
+
     async def get_task(self, task_id: str) -> dict | None:
         """Задача целиком или None, если её больше нет. task_id глобален (план не нужен)."""
         client = await self._http()

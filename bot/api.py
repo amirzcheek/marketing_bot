@@ -313,6 +313,12 @@ async def _notify_web_submission(
     bot: Bot | None = app.get("bot")
     if not bot or not chat_ids:
         return
+    # те же кнопки исполнителя, что и для Telegram-заявок
+    from .handlers import build_actions_kb
+
+    registry = app.get("registry")
+    dep = registry.get(ticket.target_department) if registry else None
+    kb = build_actions_kb(dep.actions, ticket.number) if (dep and ticket.planner_task_id) else None
     for chat_id in chat_ids:
         try:
             await bot.send_message(
@@ -320,6 +326,7 @@ async def _notify_web_submission(
                 text=notification_html(ticket),
                 parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True,
+                reply_markup=kb,
             )
             for index, local_path in enumerate(files):
                 attachment = ticket.attachments[index]

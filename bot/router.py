@@ -20,6 +20,8 @@ class Route:
     assignees: tuple[str, ...]
     bucket_status: dict[str, str]
     type_buckets: dict[str, str]  # тип обращения → id отдельного сегмента
+    staff: dict[str, str]  # user_id → имя (кто может менять статус)
+    actions: tuple[dict, ...]  # кнопки-действия под уведомлением
 
     def bucket_for(self, request_type: str) -> tuple[str, str]:
         """Сегмент для заявки: отдельный по типу (по id), иначе общий отдела."""
@@ -45,6 +47,8 @@ class TicketRouter:
             # у отдела свой маппинг сегмент→статус; если нет — общий дефолт
             bucket_status=dep.bucket_status or BUCKET_STATUS,
             type_buckets=dep.type_buckets,
+            staff=dep.staff,
+            actions=dep.actions,
         )
 
     def route(self, code: str) -> Route | None:

@@ -35,6 +35,10 @@ class Department:
     bucket_status: dict[str, str] = field(default_factory=dict)
     # тип обращения → id сегмента: заявки этого типа падают в отдельную колонку
     type_buckets: dict[str, str] = field(default_factory=dict)
+    # исполнители, которые могут менять статус из Telegram: telegram user_id (str) → имя
+    staff: dict[str, str] = field(default_factory=dict)
+    # действия-кнопки под уведомлением: [{label, bucket, done}]
+    actions: tuple[dict, ...] = ()
 
 
 class DepartmentRegistry:
@@ -112,6 +116,16 @@ def _parse_department(code: str, raw: dict, cfg: Config) -> Department:
     type_buckets = {
         str(k): str(v) for k, v in (raw.get("type_buckets") or {}).items() if k and v
     }
+    staff = {str(k): str(v) for k, v in (raw.get("staff") or {}).items() if k and v}
+    actions = tuple(
+        {
+            "label": str(a.get("label", "")),
+            "bucket": str(a.get("bucket", "")),
+            "done": bool(a.get("done", False)),
+        }
+        for a in (raw.get("actions") or [])
+        if isinstance(a, dict) and a.get("label") and a.get("bucket")
+    )
 
     return Department(
         code=code,
@@ -125,6 +139,8 @@ def _parse_department(code: str, raw: dict, cfg: Config) -> Department:
         request_types=request_types,
         bucket_status=bucket_status,
         type_buckets=type_buckets,
+        staff=staff,
+        actions=actions,
     )
 
 

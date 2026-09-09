@@ -945,6 +945,17 @@ async def _upload_attachments(context: ContextTypes.DEFAULT_TYPE, ticket: Ticket
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def build_actions_kb(actions: tuple[dict, ...], number: str) -> InlineKeyboardMarkup | None:
+    """Кнопки смены статуса под уведомлением: act:<номер>:<индекс действия>."""
+    if not actions:
+        return None
+    rows = [
+        [InlineKeyboardButton(a["label"], callback_data=f"act:{number}:{i}")]
+        for i, a in enumerate(actions)
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
 async def _notify_target(
     context: ContextTypes.DEFAULT_TYPE, ticket: Ticket, chat_ids: tuple[str, ...]
 ) -> None:
@@ -956,6 +967,11 @@ async def _notify_target(
             ticket.number,
         )
         return
+    # кнопки-действия исполнителя (если у отдела настроены actions и задача в Planner)
+    registry: DepartmentRegistry = context.bot_data["registry"]
+    dep = registry.get(ticket.target_department)
+    kb = build_actions_kb(dep.actions, ticket.number) if (dep and ticket.planner_task_id) else None
+
     for chat_id in chat_ids:
         try:
             await context.bot.send_message(
@@ -963,6 +979,7 @@ async def _notify_target(
                 text=notification_html(ticket),
                 parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True,
+                reply_markup=kb,
             )
         except TelegramError as exc:
             log.error(
@@ -972,6 +989,83 @@ async def _notify_target(
                 ticket.target_department,
                 exc,
             )
+
+
+# --- действия исполнителя (смена статуса из уведомления) --------------------
+
+
+async def action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопка «В работе»/«Выполнено» под уведомлением: двигает задачу в Planner + автор."""
+    query = update.callback_query
+    parts = query.data.split(":", 2)
+    if len(parts) != 3:
+        await query.answer()
+        return
+    _, number, idx = parts
+
+    db: RequestsDB = context.bot_data["db"]
+    registry: DepartmentRegistry = context.bot_data["registry"]
+    planner: PlannerClient | None = context.bot_data.get("planner")
+
+    row = await db.get_by_id(number)
+    if row is None:
+        await query.answer("Заявка не найдена", show_alert=True)
+        return
+    dep = registry.get(row.get("target_department") or "marketing")
+    if dep is None:
+        await query.answer("Отдел не найден", show_alert=True)
+        return
+
+    # доступ — только у исполнителей отдела
+    uid = str(query.from_user.id)
+    if uid not in dep.staff:
+        await query.answer("У вас нет прав менять статус этой заявки", show_alert=True)
+        return
+    actor = dep.staff[uid]
+
+    try:
+        action = dep.actions[int(idx)]
+    except (ValueError, IndexError):
+        await query.answer("Действие недоступно", show_alert=True)
+        return
+
+    task_id = row.get("planner_task_id")
+    plan_id = row.get("planner_plan_id")
+    if planner is None or not task_id or not plan_id:
+        await query.answer("Задача недоступна в Planner", show_alert=True)
+        return
+
+    now = datetime.now().strftime("%d.%m.%Y %H:%M")
+    try:
+        names = await planner.bucket_names(plan_id)
+        bucket_id = next((bid for bid, name in names.items() if name == action["bucket"]), None)
+        if not bucket_id:
+            await query.answer(f"Сегмент «{action['bucket']}» не найден в плане", show_alert=True)
+            return
+        await planner.move_task(task_id, bucket_id, action.get("done", False))
+        # автор фиксируется и в Planner (журнал в описании задачи)
+        await planner.append_status_note(task_id, f"{action['label']} — {actor}, {now}")
+    except GraphError:
+        await query.answer("Не удалось обновить в Planner, попробуйте позже", show_alert=True)
+        return
+    except Exception:
+        log.exception("Ошибка смены статуса заявки %s", number)
+        await query.answer("Ошибка при обновлении", show_alert=True)
+        return
+
+    await db.record_action(number, "done" if action.get("done") else "in_progress", actor, now)
+
+    # обновляем карточку в чате: дописываем строку журнала, кнопки оставляем
+    try:
+        base = query.message.text_html if query.message and query.message.text else ""
+        await query.edit_message_text(
+            f"{base}\n\n<b>{escape(action['label'])}</b> · {escape(actor)}, {now}",
+            reply_markup=build_actions_kb(dep.actions, number),
+            parse_mode=ParseMode.HTML,
+        )
+    except TelegramError:
+        pass
+    await query.answer(f"{action['label']} · {actor}")
 
 
 # --- мои заявки -------------------------------------------------------------
@@ -1224,6 +1318,8 @@ def register(app: Application) -> None:
     # поэтому они долетают сюда даже посреди заполнения заявки
     app.add_handler(CommandHandler("my", my_command))
     app.add_handler(CallbackQueryHandler(my_callback, pattern=r"^my:"))
+    # действия исполнителя из уведомления (вне диалога) — до catch-all
+    app.add_handler(CallbackQueryHandler(action_callback, pattern=r"^act:"))
     app.add_handler(CommandHandler("myid", myid))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("cancel", cancel))

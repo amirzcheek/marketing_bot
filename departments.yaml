@@ -47,6 +47,15 @@ departments:
     # заявки типа edms падают в отдельную колонку (в обход общей «Заявки Service Desk»)
     type_buckets:
       edms: "7BiOeR5G10eXApJpggdlMpgABOGn"   # сегмент «📄 EDMS» в плане ДИТ
+    # исполнители: кто может менять статус заявок ДИТ прямо из Telegram (id → имя)
+    staff:
+      "245028573": "Yervand Yervandian"
+      "1319875693": "Sergali Akhmetkali"
+      "532407959": "Amirkhan Ilyassov"
+    # кнопки-действия под уведомлением: перевод задачи в сегмент доски
+    actions:
+      - { label: "🔧 В работе", bucket: "В работе" }
+      - { label: "✅ Выполнено", bucket: "Выполнено", done: true }
     bucket_status:
       "📥 Заявки Service Desk": "🆕 Принята, ждёт очереди"
       "📄 EDMS": "🆕 Принята, ждёт очереди"
