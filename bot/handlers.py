@@ -994,8 +994,63 @@ async def _notify_target(
 # --- действия исполнителя (смена статуса из уведомления) --------------------
 
 
+async def _do_action(
+    context: ContextTypes.DEFAULT_TYPE, number: str, idx, from_user
+) -> tuple[bool, str]:
+    """Общая логика смены статуса (из уведомления и из /queue).
+
+    idx — индекс действия отдела, или None → берём завершающее действие (done).
+    Возвращает (успех, текст для тоста/журнала).
+    """
+    db: RequestsDB = context.bot_data["db"]
+    registry: DepartmentRegistry = context.bot_data["registry"]
+    planner: PlannerClient | None = context.bot_data.get("planner")
+
+    row = await db.get_by_id(number)
+    if row is None:
+        return False, "Заявка не найдена"
+    dep = registry.get(row.get("target_department") or "marketing")
+    if dep is None:
+        return False, "Отдел не найден"
+
+    uid = str(from_user.id)
+    if uid not in dep.staff:
+        return False, "У вас нет прав менять статус этой заявки"
+    actor = dep.staff[uid]
+
+    if idx is None:
+        idx = next((i for i, a in enumerate(dep.actions) if a.get("done")), 0)
+    try:
+        action = dep.actions[int(idx)]
+    except (ValueError, IndexError):
+        return False, "Действие недоступно"
+
+    task_id = row.get("planner_task_id")
+    plan_id = row.get("planner_plan_id")
+    if planner is None or not task_id or not plan_id:
+        return False, "Задача недоступна в Planner"
+
+    now = datetime.now().strftime("%d.%m.%Y %H:%M")
+    try:
+        names = await planner.bucket_names(plan_id)
+        bucket_id = next((bid for bid, name in names.items() if name == action["bucket"]), None)
+        if not bucket_id:
+            return False, f"Сегмент «{action['bucket']}» не найден в плане"
+        await planner.move_task(task_id, bucket_id, action.get("done", False))
+        # автор фиксируется в Planner — журнал в описании задачи
+        await planner.append_status_note(task_id, f"{action['label']} — {actor}, {now}")
+    except GraphError:
+        return False, "Не удалось обновить в Planner, попробуйте позже"
+    except Exception:
+        log.exception("Ошибка смены статуса заявки %s", number)
+        return False, "Ошибка при обновлении"
+
+    await db.record_action(number, "done" if action.get("done") else "in_progress", actor, now)
+    return True, f"{action['label']} · {actor}, {now}"
+
+
 async def action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Кнопка «В работе»/«Выполнено» под уведомлением: двигает задачу в Planner + автор."""
+    """Кнопка «Выполнено» под уведомлением: закрывает заявку, фиксирует исполнителя."""
     query = update.callback_query
     parts = query.data.split(":", 2)
     if len(parts) != 3:
@@ -1003,69 +1058,101 @@ async def action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     _, number, idx = parts
 
-    db: RequestsDB = context.bot_data["db"]
-    registry: DepartmentRegistry = context.bot_data["registry"]
-    planner: PlannerClient | None = context.bot_data.get("planner")
-
-    row = await db.get_by_id(number)
-    if row is None:
-        await query.answer("Заявка не найдена", show_alert=True)
-        return
-    dep = registry.get(row.get("target_department") or "marketing")
-    if dep is None:
-        await query.answer("Отдел не найден", show_alert=True)
+    ok, toast = await _do_action(context, number, idx, query.from_user)
+    if not ok:
+        await query.answer(toast, show_alert=True)
         return
 
-    # доступ — только у исполнителей отдела
-    uid = str(query.from_user.id)
-    if uid not in dep.staff:
-        await query.answer("У вас нет прав менять статус этой заявки", show_alert=True)
-        return
-    actor = dep.staff[uid]
-
-    try:
-        action = dep.actions[int(idx)]
-    except (ValueError, IndexError):
-        await query.answer("Действие недоступно", show_alert=True)
-        return
-
-    task_id = row.get("planner_task_id")
-    plan_id = row.get("planner_plan_id")
-    if planner is None or not task_id or not plan_id:
-        await query.answer("Задача недоступна в Planner", show_alert=True)
-        return
-
-    now = datetime.now().strftime("%d.%m.%Y %H:%M")
-    try:
-        names = await planner.bucket_names(plan_id)
-        bucket_id = next((bid for bid, name in names.items() if name == action["bucket"]), None)
-        if not bucket_id:
-            await query.answer(f"Сегмент «{action['bucket']}» не найден в плане", show_alert=True)
-            return
-        await planner.move_task(task_id, bucket_id, action.get("done", False))
-        # автор фиксируется и в Planner (журнал в описании задачи)
-        await planner.append_status_note(task_id, f"{action['label']} — {actor}, {now}")
-    except GraphError:
-        await query.answer("Не удалось обновить в Planner, попробуйте позже", show_alert=True)
-        return
-    except Exception:
-        log.exception("Ошибка смены статуса заявки %s", number)
-        await query.answer("Ошибка при обновлении", show_alert=True)
-        return
-
-    await db.record_action(number, "done" if action.get("done") else "in_progress", actor, now)
-
-    # обновляем карточку в чате: дописываем строку журнала, кнопки оставляем
+    # карточка выполнена — дописываем строку и убираем кнопки
     try:
         base = query.message.text_html if query.message and query.message.text else ""
         await query.edit_message_text(
-            f"{base}\n\n<b>{escape(action['label'])}</b> · {escape(actor)}, {now}",
-            reply_markup=build_actions_kb(dep.actions, number),
-            parse_mode=ParseMode.HTML,
+            f"{base}\n\n<b>{escape(toast)}</b>", parse_mode=ParseMode.HTML
         )
     except TelegramError:
         pass
-    await query.answer(f"{action['label']} · {actor}")
+    await query.answer("Готово")
+
+
+# --- очередь заявок исполнителя (/queue) ------------------------------------
+
+QUEUE_PAGE = 8
+
+
+def _staff_departments(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> list[str]:
+    """Коды отделов, где пользователь — исполнитель."""
+    registry: DepartmentRegistry = context.bot_data["registry"]
+    uid = str(user_id)
+    return [d.code for d in registry.enabled() if uid in d.staff]
+
+
+def _queue_kb(rows: list[dict], page: int) -> InlineKeyboardMarkup:
+    start = page * QUEUE_PAGE
+    chunk = rows[start : start + QUEUE_PAGE]
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                f"✅ №{r['id']} · {_short(r['task_type'] or '', 18)} · {_short(r['summary'] or '', 22)}",
+                callback_data=f"qdone:{r['id']}",
+            )
+        ]
+        for r in chunk
+    ]
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️", callback_data=f"qpage:{page - 1}"))
+    nav.append(InlineKeyboardButton("🔄 Обновить", callback_data=f"qpage:{page}"))
+    if start + QUEUE_PAGE < len(rows):
+        nav.append(InlineKeyboardButton("➡️", callback_data=f"qpage:{page + 1}"))
+    keyboard.append(nav)
+    return InlineKeyboardMarkup(keyboard)
+
+
+async def _render_queue(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int) -> None:
+    query = update.callback_query
+    depts = _staff_departments(context, update.effective_user.id)
+
+    async def _out(text, kb=None):
+        if query:
+            await query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        else:
+            await update.effective_message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+    if not depts:
+        await _out("Вы не назначены исполнителем ни в одном отделе.")
+        return
+
+    db: RequestsDB = context.bot_data["db"]
+    rows = await db.open_tickets_for(depts)
+    if not rows:
+        await _out("✅ Открытых заявок нет.")
+        return
+
+    pages = (len(rows) + QUEUE_PAGE - 1) // QUEUE_PAGE
+    page = max(0, min(page, pages - 1))
+    header = f"🗂 <b>Открытые заявки: {len(rows)}</b>"
+    if pages > 1:
+        header += f"\nСтраница {page + 1} из {pages}"
+    header += "\n\nНажмите «✅», когда заявка выполнена."
+    await _out(header, _queue_kb(rows, page))
+
+
+async def queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _render_queue(update, context, 0)
+
+
+async def queue_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    action, value = query.data.split(":", 1)
+    if action == "qpage":
+        await query.answer()
+        await _render_queue(update, context, int(value))
+        return
+    # qdone: завершить заявку (done-действие её отдела)
+    ok, toast = await _do_action(context, value, None, query.from_user)
+    await query.answer(("Готово: " + toast) if ok else toast, show_alert=not ok)
+    if ok:
+        await _render_queue(update, context, 0)  # выполненная уходит из очереди
 
 
 # --- мои заявки -------------------------------------------------------------
@@ -1229,6 +1316,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Бот приёма заявок в отдел маркетинга КНУС.\n\n"
         "/start — главное меню (создать заявку / мои заявки)\n"
         "/my — мои заявки и их статус\n"
+        "/queue — очередь заявок отдела (для исполнителей)\n"
         "/cancel — сбросить текущий диалог\n"
         "/myid — показать chat_id этого чата"
     )
@@ -1320,6 +1408,9 @@ def register(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(my_callback, pattern=r"^my:"))
     # действия исполнителя из уведомления (вне диалога) — до catch-all
     app.add_handler(CallbackQueryHandler(action_callback, pattern=r"^act:"))
+    # очередь заявок исполнителя
+    app.add_handler(CommandHandler("queue", queue_command))
+    app.add_handler(CallbackQueryHandler(queue_callback, pattern=r"^q(done|page):"))
     app.add_handler(CommandHandler("myid", myid))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("cancel", cancel))

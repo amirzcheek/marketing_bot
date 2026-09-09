@@ -46,6 +46,7 @@ async def _post_init(app: Application) -> None:
         [
             BotCommand("start", "Главное меню бота"),
             BotCommand("my", "Мои заявки и их статус"),
+            BotCommand("queue", "Очередь заявок отдела (исполнителям)"),
             BotCommand("cancel", "Сбросить текущий диалог"),
             BotCommand("myid", "Показать chat_id этого чата"),
             BotCommand("help", "Справка"),

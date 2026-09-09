@@ -52,9 +52,8 @@ departments:
       "245028573": "Yervand Yervandian"
       "1319875693": "Sergali Akhmetkali"
       "532407959": "Amirkhan Ilyassov"
-    # кнопки-действия под уведомлением: перевод задачи в сегмент доски
+    # кнопка-действие под уведомлением: одно нажатие закрывает заявку
     actions:
-      - { label: "🔧 В работе", bucket: "В работе" }
       - { label: "✅ Выполнено", bucket: "Выполнено", done: true }
     bucket_status:
       "📥 Заявки Service Desk": "🆕 Принята, ждёт очереди"

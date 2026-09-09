@@ -257,6 +257,28 @@ class RequestsDB:
         except sqlite3.Error as exc:
             log.error("Не удалось записать действие по заявке %s: %s", number, exc)
 
+    def _open_tickets_sync(self, depts: list[str]) -> list[dict]:
+        placeholders = ",".join("?" for _ in depts)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM requests WHERE status != 'done' "
+                f"AND target_department IN ({placeholders}) "
+                "AND planner_task_id IS NOT NULL AND planner_task_id != '' "
+                "ORDER BY created_ts DESC",
+                depts,
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    async def open_tickets_for(self, depts: list[str]) -> list[dict]:
+        """Открытые (не завершённые) заявки указанных отделов — для очереди исполнителя."""
+        if not depts:
+            return []
+        try:
+            return await asyncio.to_thread(self._open_tickets_sync, depts)
+        except sqlite3.Error as exc:
+            log.error("Не удалось прочитать очередь заявок: %s", exc)
+            return []
+
     # --- агрегаты и выборки (для HTTP API) ---------------------------------
 
     async def stats(self, target_department: str = "") -> dict:
