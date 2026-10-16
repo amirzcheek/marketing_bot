@@ -48,6 +48,7 @@ class Ticket:
     route_key: str = ""
     # department — подразделение ЗАЯВИТЕЛЯ (откуда подаёт); теперь просто атрибут
     department: str = ""
+    requester_category: str = ""  # категория персонала заявителя: АУП / ППС (пусто — не указана)
     request_type: str = ""  # ключ типа обращения
     task_type: str = ""  # человекочитаемое название типа
     category: str = ""  # метка Planner по типу задачи, пусто для «Другое»
@@ -192,7 +193,8 @@ def request_card_html(row: dict, status: str, target_name: str = "") -> str:
     if target_name:
         lines.append(f"<b>Отдел:</b> {e(target_name)}")
     lines += [
-        f"<b>Подразделение заявителя:</b> {e(row['department'] or '—')}",
+        f"<b>Подразделение заявителя:</b> {e(row['department'] or '—')}"
+        + (f" ({e(row.get('requester_category') or '')})" if row.get('requester_category') else ""),
         f"<b>Тип обращения:</b> {e(row['task_type'] or '—')}",
         f"<b>Суть:</b> {e(row['summary'] or '—')}",
         f"<b>Дедлайн:</b> {e(row['deadline'] or NO_DEADLINE)}",
@@ -224,7 +226,8 @@ def planner_description(t: Ticket) -> str:
         f"Заявка № {t.number}",
         "",
         f"Отдел-исполнитель: {t.target_department_name or t.target_department}",
-        f"Подразделение заявителя: {t.department or '—'}",
+        f"Подразделение заявителя: {t.department or '—'}"
+        + (f" ({t.requester_category})" if t.requester_category else ""),
         f"Тип обращения: {t.task_type}",
         f"Приоритет: {t.priority}",
         f"Дедлайн: {t.deadline or NO_DEADLINE}",
@@ -293,7 +296,8 @@ def summary_html(t: Ticket) -> str:
         "<b>📋 Проверьте заявку</b>",
         "",
         f"<b>Кому (отдел):</b> {e(t.target_department_name or t.target_department)}",
-        f"<b>Ваше подразделение:</b> {e(t.department or '—')}",
+        f"<b>Ваше подразделение:</b> {e(t.department or '—')}"
+        + (f" <i>({e(t.requester_category)})</i>" if t.requester_category else ""),
         f"<b>Тип обращения:</b> {e(t.task_type)}",
         f"<b>Описание:</b> {e(t.description)}",
     ]
@@ -333,7 +337,8 @@ def notification_html(t: Ticket) -> str:
         head,
         "",
         f"<b>Отдел:</b> {e(t.target_department_name or t.target_department)}",
-        f"<b>Подразделение заявителя:</b> {e(t.department or '—')}",
+        f"<b>Подразделение заявителя:</b> {e(t.department or '—')}"
+        + (f" <i>({e(t.requester_category)})</i>" if t.requester_category else ""),
         f"<b>Тип:</b> {e(t.task_type)}",
         f"<b>Приоритет:</b> {e(t.priority)}",
         f"<b>Дедлайн:</b> {e(t.deadline or NO_DEADLINE)}",

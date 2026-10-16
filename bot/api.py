@@ -25,7 +25,15 @@ from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
 from .config import Config
-from .constants import DEPARTMENTS, NO_DEADLINE, PRIORITIES, REQUEST_TYPES, TASK_TYPE_CATEGORY
+from .constants import (
+    DEPARTMENTS,
+    DEPARTMENTS_BY_CATEGORY,
+    NO_DEADLINE,
+    PRIORITIES,
+    REQUEST_TYPES,
+    STAFF_CATEGORIES,
+    TASK_TYPE_CATEGORY,
+)
 from .db import RequestsDB
 from .departments import DepartmentRegistry
 from .graph import GraphError, PlannerClient, sanitize_filename
@@ -122,9 +130,20 @@ async def catalog(request: web.Request) -> web.Response:
             {"code": department.code, "name": department.name, "request_types": request_types}
         )
 
+    # плоский список (совместимость) + разбивка по категориям персонала (АУП/ППС)
     requester_departments = [
         {"code": key, "name": value[1] or value[0]} for key, value in DEPARTMENTS.items()
     ]
+    staff_categories = [
+        {"code": key, "name": value[1] or value[0]} for key, value in STAFF_CATEGORIES.items()
+    ]
+    requester_departments_by_category = {
+        cat: [
+            {"code": key, "name": value[1] or value[0]}
+            for key, value in depts.items()
+        ]
+        for cat, depts in DEPARTMENTS_BY_CATEGORY.items()
+    }
     priorities = [{"code": key, "name": value[1]} for key, value in PRIORITIES.items()]
     cfg: Config = request.app["config"]
     return _json(
@@ -132,6 +151,8 @@ async def catalog(request: web.Request) -> web.Response:
             "version": "1.0",
             "departments": targets,
             "requester_departments": requester_departments,
+            "staff_categories": staff_categories,
+            "requester_departments_by_category": requester_departments_by_category,
             "priorities": priorities,
             "limits": {
                 "max_attachments": cfg.max_attachments,
@@ -383,6 +404,14 @@ async def create_ticket(request: web.Request) -> web.Response:
                 DEPARTMENTS, fields.get("department", ""),
                 fields.get("department_other", ""), "подразделение",
             )
+            # категория персонала заявителя (АУП/ППС): принимаем код или готовую метку
+            cat_raw = (fields.get("requester_category") or "").strip()
+            cat_value = STAFF_CATEGORIES.get(cat_raw)
+            if cat_value:
+                # из полного названия берём короткую метку (напр. «АУП»)
+                ticket.requester_category = cat_value[0].split(" ", 1)[-1]
+            else:
+                ticket.requester_category = cat_raw[:50]
 
             # тип обращения — только из типов выбранного отдела
             registry: DepartmentRegistry = request.app["registry"]

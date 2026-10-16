@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS requests (
     last_action_at       TEXT,
     target_department    TEXT DEFAULT 'marketing',
     requester_department TEXT,
+    requester_category   TEXT,
     request_type         TEXT,
     planner_plan_id      TEXT,
     assignees            TEXT,
@@ -61,6 +62,7 @@ MIGRATIONS: dict[str, str] = {
     "status_updated_at": "ALTER TABLE requests ADD COLUMN status_updated_at TEXT",
     "target_department": "ALTER TABLE requests ADD COLUMN target_department TEXT DEFAULT 'marketing'",
     "requester_department": "ALTER TABLE requests ADD COLUMN requester_department TEXT",
+    "requester_category": "ALTER TABLE requests ADD COLUMN requester_category TEXT",
     "request_type": "ALTER TABLE requests ADD COLUMN request_type TEXT",
     "planner_plan_id": "ALTER TABLE requests ADD COLUMN planner_plan_id TEXT",
     "assignees": "ALTER TABLE requests ADD COLUMN assignees TEXT",
@@ -116,9 +118,10 @@ class RequestsDB:
                     id, telegram_user_id, telegram_username, planner_task_id,
                     department, task_type, summary, deadline, priority, contact, phone,
                     created_at, created_ts, attachments_count, status, status_updated_at,
-                    target_department, requester_department, request_type, planner_plan_id,
+                    target_department, requester_department, requester_category,
+                    request_type, planner_plan_id,
                     assignees, route_key, source, submitter_name, submitter_email
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     ticket.number,
@@ -138,6 +141,7 @@ class RequestsDB:
                     created_ts,
                     ticket.target_department,
                     ticket.department,  # requester_department (то же значение, отдельная колонка)
+                    ticket.requester_category,  # АУП / ППС
                     ticket.request_type,
                     ticket.planner_plan_id,
                     json.dumps(ticket.assignees, ensure_ascii=False),

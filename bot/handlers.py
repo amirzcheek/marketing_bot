@@ -23,9 +23,11 @@ from telegram.ext import (
 from .config import Config
 from .constants import (
     DEPARTMENTS,
+    DEPARTMENTS_BY_CATEGORY,
     NO_DEADLINE,
     PRIORITIES,
     REQUEST_TYPES,
+    STAFF_CATEGORIES,
     TASK_TYPE_CATEGORY,
     TELEGRAM_DOWNLOAD_LIMIT,
 )
@@ -53,6 +55,7 @@ log = logging.getLogger(__name__)
 (
     MENU,
     TARGET,
+    CATEGORY,
     DEPARTMENT,
     DEPARTMENT_OTHER,
     TASK_TYPE,
@@ -66,7 +69,7 @@ log = logging.getLogger(__name__)
     PHONE,
     CONFIRM,
     EDIT_MENU,
-) = range(15)
+) = range(16)
 
 MIN_DESCRIPTION_LEN = 10
 
@@ -100,15 +103,31 @@ def _targets_kb(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _departments_kb(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+def _category_kb(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
     registry: DepartmentRegistry = context.bot_data["registry"]
-    # если отдел один, шага выбора получателя не было — «Назад» ведёт в меню
+    # если отдел-исполнитель один, шага выбора получателя не было — «Назад» ведёт в меню
     back = "menu" if registry.single_enabled is not None else "target"
     rows = [
-        [InlineKeyboardButton(label, callback_data=f"dep:{key}")]
-        for key, (label, _) in DEPARTMENTS.items()
+        [InlineKeyboardButton(label, callback_data=f"cat:{key}")]
+        for key, (label, _) in STAFF_CATEGORIES.items()
     ]
     rows.append(_back_row(context, back))
+    return InlineKeyboardMarkup(rows)
+
+
+def _req_category(context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Выбранная категория персонала заявителя (aup/pps). По умолчанию aup."""
+    return context.user_data.get("req_category", "aup")
+
+
+def _departments_kb(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+    # список департаментов зависит от выбранной категории (АУП/ППС)
+    depts = DEPARTMENTS_BY_CATEGORY.get(_req_category(context), DEPARTMENTS_BY_CATEGORY["aup"])
+    rows = [
+        [InlineKeyboardButton(label, callback_data=f"dep:{key}")]
+        for key, (label, _) in depts.items()
+    ]
+    rows.append(_back_row(context, "category"))
     return InlineKeyboardMarkup(rows)
 
 
@@ -241,6 +260,16 @@ async def show_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     return TARGET
 
 
+async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await _send(
+        update,
+        "<b>Шаг: категория.</b> Вы из АУП или ППС?\n"
+        "<i>АУП — административно-управленческий персонал, ППС — профессорско-преподавательский состав.</i>",
+        _category_kb(context),
+    )
+    return CATEGORY
+
+
 async def show_department(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await _send(
         update,
@@ -353,7 +382,7 @@ async def menu_create(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     single = registry.single_enabled
     if single is not None:
         _apply_target(context, single.code)
-        return await show_department(update, context)
+        return await show_category(update, context)
     return await show_target(update, context)
 
 
@@ -367,12 +396,26 @@ async def target_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     if _editing(context):
         return await show_summary(update, context)
+    return await show_category(update, context)
+
+
+async def category_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    code = query.data.split(":", 1)[1]
+    if code not in STAFF_CATEGORIES:
+        return await show_category(update, context)
+    context.user_data["req_category"] = code
+    # человекочитаемая метка категории для заявки (напр. «АУП»)
+    label = STAFF_CATEGORIES[code][0].split(" ", 1)[-1] if " " in STAFF_CATEGORIES[code][0] else STAFF_CATEGORIES[code][0]
+    _ticket(context).requester_category = label
     return await show_department(update, context)
 
 
 _NAV = {
     "menu": show_menu,
     "target": show_target,
+    "category": show_category,
     "department": show_department,
     "type": show_task_type,
     "description": show_description,
@@ -400,7 +443,8 @@ async def department_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     query = update.callback_query
     await query.answer()
     key = query.data.split(":", 1)[1]
-    _, full_name = DEPARTMENTS[key]
+    depts = DEPARTMENTS_BY_CATEGORY.get(_req_category(context), DEPARTMENTS)
+    _, full_name = depts.get(key) or DEPARTMENTS.get(key, ("", ""))
 
     if key == "other":
         await query.edit_message_text(
@@ -736,7 +780,7 @@ async def edit_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     context.user_data["editing"] = True
 
     if field == "department":
-        return await show_department(update, context)
+        return await show_category(update, context)
     if field == "type":
         return await show_task_type(update, context)
     if field == "description":
@@ -1360,6 +1404,7 @@ def build_conversation() -> ConversationHandler:
         states={
             MENU: [CallbackQueryHandler(menu_create, pattern=r"^menu:create$")],
             TARGET: [CallbackQueryHandler(target_chosen, pattern=r"^tgt:"), nav],
+            CATEGORY: [CallbackQueryHandler(category_chosen, pattern=r"^cat:"), nav],
             DEPARTMENT: [CallbackQueryHandler(department_chosen, pattern=r"^dep:"), nav],
             DEPARTMENT_OTHER: [
                 nav,
