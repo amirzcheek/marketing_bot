@@ -3,7 +3,7 @@
 import logging
 import shutil
 import tempfile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from html import escape
 from pathlib import Path
 
@@ -155,9 +155,17 @@ def _priority_kb(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
 
 
 def _deadline_kb(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+    today = date.today()
+
+    def preset(text: str, days: int) -> InlineKeyboardButton:
+        d = today + timedelta(days=days)
+        return InlineKeyboardButton(f"{text} · {d:%d.%m}", callback_data=f"deadline:d:{days}")
+
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("🗓 Без срока", callback_data="deadline:none")],
+            [preset("📅 Сегодня", 0), preset("Завтра", 1)],
+            [preset("🗓 +3 дня", 3), preset("Неделя", 7)],
+            [InlineKeyboardButton("♾ Без срока", callback_data="deadline:none")],
             _back_row(context, "attach"),
         ]
     )
@@ -305,7 +313,8 @@ async def show_attach_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def show_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await _send(
         update,
-        "<b>Шаг: срок.</b> К какому сроку нужно? Введите дату в формате <code>ДД.ММ.ГГГГ</code>.",
+        "<b>Шаг: срок.</b> К какому сроку нужно? Выберите кнопкой ниже "
+        "или введите дату вручную в формате <code>ДД.ММ.ГГГГ</code>.",
         _deadline_kb(context),
     )
     return DEADLINE
@@ -688,6 +697,21 @@ async def deadline_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     ticket = _ticket(context)
     ticket.deadline = parsed.strftime("%d.%m.%Y")
+
+    if _editing(context):
+        return await show_summary(update, context)
+    return await show_priority(update, context)
+
+
+async def deadline_preset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Быстрый выбор срока кнопкой: сегодня/завтра/+N дней."""
+    query = update.callback_query
+    await query.answer()
+    try:
+        days = int(query.data.split(":")[2])
+    except (IndexError, ValueError):
+        days = 0
+    _ticket(context).deadline = (date.today() + timedelta(days=days)).strftime("%d.%m.%Y")
 
     if _editing(context):
         return await show_summary(update, context)
@@ -1431,6 +1455,7 @@ def build_conversation() -> ConversationHandler:
             ],
             DEADLINE: [
                 CallbackQueryHandler(deadline_skipped, pattern=r"^deadline:none$"),
+                CallbackQueryHandler(deadline_preset, pattern=r"^deadline:d:\d+$"),
                 nav,
                 MessageHandler(filters.TEXT & ~filters.COMMAND, deadline_entered),
             ],
