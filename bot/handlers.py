@@ -166,6 +166,7 @@ def _deadline_kb(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
         [
             [preset("📅 Сегодня", 0), preset("Завтра", 1)],
             [preset("🗓 +3 дня", 3), preset("Неделя", 7)],
+            [InlineKeyboardButton("✏️ Своя дата", callback_data="deadline:manual")],
             [InlineKeyboardButton("♾ Без срока", callback_data="deadline:none")],
             _back_row(context, "attach"),
         ]
@@ -314,8 +315,7 @@ async def show_attach_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def show_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await _send(
         update,
-        "<b>Шаг: срок.</b> К какому сроку нужно? Выберите кнопкой ниже "
-        "или введите дату вручную в формате <code>ДД.ММ.ГГГГ</code>.",
+        "<b>Шаг: срок.</b> К какому сроку нужно? Выберите кнопкой ниже.",
         _deadline_kb(context),
     )
     return DEADLINE
@@ -705,6 +705,19 @@ async def deadline_entered(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if _editing(context):
         return await show_summary(update, context)
     return await show_priority(update, context)
+
+
+async def deadline_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Кнопка «Своя дата»: просим ввести дату вручную (с примером)."""
+    query = update.callback_query
+    await query.answer()
+    await _send(
+        update,
+        "✏️ <b>Своя дата.</b> Введите дату в формате <code>ДД.ММ.ГГГГ</code>.\n"
+        "Например: <code>30.11.2026</code>",
+        _back_only_kb(context, "deadline"),
+    )
+    return DEADLINE
 
 
 async def deadline_preset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1459,6 +1472,7 @@ def build_conversation() -> ConversationHandler:
             ],
             DEADLINE: [
                 CallbackQueryHandler(deadline_skipped, pattern=r"^deadline:none$"),
+                CallbackQueryHandler(deadline_manual, pattern=r"^deadline:manual$"),
                 CallbackQueryHandler(deadline_preset, pattern=r"^deadline:d:\d+$"),
                 nav,
                 MessageHandler(filters.TEXT & ~filters.COMMAND, deadline_entered),
