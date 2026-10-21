@@ -1,5 +1,6 @@
 """Машина состояний диалога заявки."""
 
+import asyncio
 import logging
 import shutil
 import tempfile
@@ -539,9 +540,6 @@ async def description_entered(update: Update, context: ContextTypes.DEFAULT_TYPE
     llm: LLMClient = context.bot_data["llm"]
     if llm.enabled:
         notice = await update.effective_message.reply_text("⏳ Обрабатываю описание…")
-        normalized = await llm.normalize(ticket.description)
-        if normalized:
-            ticket.description_normalized = normalized
         # подсказку типа ищем среди типов ВЫБРАННОГО отдела
         registry: DepartmentRegistry = context.bot_data["registry"]
         known = [
@@ -549,7 +547,13 @@ async def description_entered(update: Update, context: ContextTypes.DEFAULT_TYPE
             for k in registry.request_types(ticket.target_department)
             if k in REQUEST_TYPES and REQUEST_TYPES[k][1]
         ]
-        suggested = await llm.suggest_type(ticket.description, known)
+        # оба запроса к LLM — параллельно, чтобы не ждать их по очереди
+        normalized, suggested = await asyncio.gather(
+            llm.normalize(ticket.description),
+            llm.suggest_type(ticket.description, known),
+        )
+        if normalized:
+            ticket.description_normalized = normalized
         if suggested:
             ticket.suggested_type = suggested
         try:

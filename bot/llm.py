@@ -13,6 +13,10 @@ from .config import Config
 
 log = logging.getLogger(__name__)
 
+# Шаг описания в боте блокирующий — человек ждёт ответа. Не держим его дольше
+# этого лимита: при медленной/зависшей генерации просто продолжаем без нормализации.
+INTERACTIVE_TIMEOUT = 30.0
+
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 NORMALIZE_PROMPT = (
@@ -57,7 +61,7 @@ class LLMClient:
             await self._client.aclose()
             self._client = None
 
-    async def _chat(self, system: str, user: str, max_tokens: int = 512) -> str | None:
+    async def _chat(self, system: str, user: str, max_tokens: int = 320) -> str | None:
         payload = {
             "model": self.cfg.llm_model,
             "messages": [
@@ -79,6 +83,7 @@ class LLMClient:
                 f"{self.cfg.llm_base_url}/chat/completions",
                 json=payload,
                 headers=headers,
+                timeout=min(self.cfg.llm_timeout, INTERACTIVE_TIMEOUT),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -107,7 +112,7 @@ class LLMClient:
         raw = await self._chat(
             SUGGEST_PROMPT.format(types=", ".join(known)),
             description.strip(),
-            max_tokens=128,
+            max_tokens=64,
         )
         if raw is None:
             return None
